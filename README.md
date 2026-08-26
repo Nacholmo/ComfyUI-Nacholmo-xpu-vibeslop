@@ -51,6 +51,7 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
 ### 3. DarkComfyX Theme & Appearance Port
 
 - **DarkComfyX Theme (`web/js/darkcomfyx_theme.js`, `web/css/darkcomfyx.css`)**:
+- **Based on the userstyle theme [Dark4chanX](https://uso.kkx.one/style/229613)**
   - Full authentic port of the DarkComfyX theme for ComfyUI based on the official [ComfyUI Appearance Guidelines](https://docs.comfy.org/interface/appearance).
   - **Charcoal Surfaces**: Base canvas `#191919`, node layers `#212121`, input card backgrounds `#181818`.
   - **4chan X Header Accent**: Clover header banner styling with `#498152` brand green top border.
