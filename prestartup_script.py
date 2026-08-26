@@ -1,24 +1,28 @@
-"""ComfyUI Prestartup Script for Intel Arc & XPU Toolkit.
-
-Automatically executed by ComfyUI server at startup before loading models or graph.
-Caps the PyTorch XPU caching allocator to protect against driver-level hard freezes.
-"""
-
 import os
 import sys
+import importlib.util
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-if _THIS_DIR not in sys.path:
-    sys.path.insert(0, _THIS_DIR)
+
+
+def _load_and_run(rel_path, func_name):
+    full_path = os.path.join(_THIS_DIR, rel_path)
+    if os.path.exists(full_path):
+        spec = importlib.util.spec_from_file_location("_nacholmo_prestartup_" + func_name, full_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        func = getattr(mod, func_name, None)
+        if func:
+            func()
+
 
 try:
-    from patches.torchaudio_guard import apply as apply_torchaudio_guard
-    apply_torchaudio_guard()
+    _load_and_run("patches/torchaudio_guard.py", "apply")
 except Exception:
     pass
 
 try:
-    from patches.xpu_vram_guard import install_deferred as install_deferred_vram_guard
-    install_deferred_vram_guard()
+    _load_and_run("patches/xpu_vram_guard.py", "install_deferred")
 except Exception:
     pass
+

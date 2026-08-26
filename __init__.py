@@ -22,15 +22,12 @@ Runtime enhancements:
 import os
 import sys
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-if _THIS_DIR not in sys.path:
-    sys.path.insert(0, _THIS_DIR)
-
 # 1. Apply system patches & stability guards
-from patches import apply_all_patches
+from .patches import apply_all_patches
 apply_all_patches()
 
 # 2. Import and expose node mappings
-from nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+
