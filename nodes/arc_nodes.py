@@ -64,26 +64,22 @@ _SCALE_REGEXES = [
 ]
 
 
+import gc
+import logging
+import multiprocessing as mp
+from multiprocessing import shared_memory
+import subprocess
+import sys
+import traceback
+
+log = logging.getLogger("ComfyUI-Nacholmo-xpu-vibeslop.ArcNodes")
+
+
 def _cleanup_spill(path):
     try:
         os.unlink(path)
     except OSError:
         pass
-
-
-_core = None
-_loaded = None  # ((path, mtime_ns, precision, performance_mode), compiled, layout, scale)
-
-
-def _get_core():
-    global _core
-    if not HAS_OPENVINO:
-        raise RuntimeError("OpenVINO is not installed. Please run 'pip install openvino'.")
-    if _core is None:
-        _core = ov.Core()
-        if _CACHE_DIR:
-            _core.set_property({"CACHE_DIR": _CACHE_DIR})
-    return _core
 
 
 def detect_scale_from_filename(filename: str) -> int | None:
@@ -95,125 +91,257 @@ def detect_scale_from_filename(filename: str) -> int | None:
     return None
 
 
-def _detect_layout(model, name):
-    shape = model.input(0).partial_shape
-    if len(shape) != 4:
-        raise ValueError(f"{name}: expected a 4D NCHW/NHWC input, got rank {len(shape)}")
-    c2 = shape[1].get_length() if not shape[1].is_dynamic else None
-    c4 = shape[3].get_length() if not shape[3].is_dynamic else None
-    if c2 == 3:
-        return "NCHW"
-    if c4 == 3:
-        return "NHWC"
-    if c2 is None and c4 is None:
-        return "NCHW"
-    raise ValueError(f"{name}: could not find 3 RGB channels in input shape {shape}")
+# ─── Standalone OpenVINO Worker Process Client ─────────────────────────────────
+
+_WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "arc_openvino_worker.py")
 
 
-def _infer_patch(request, patch, layout):
-    x = np.ascontiguousarray(patch, dtype=np.float32)
-    if layout == "NCHW":
-        x = np.ascontiguousarray(x.transpose(2, 0, 1))[None]
-    else:
-        x = x[None]
-    request.infer(ov.Tensor(x))
-    y = request.get_output_tensor(0).data[0]
-    if layout == "NCHW":
-        y = y.transpose(1, 2, 0)
-    return np.ascontiguousarray(y, dtype=np.float32)
+class _ArcWorkerClient:
+    def __init__(self):
+        self.proc = None
+        self.conn = None
+        self.listener = None
+        self.sock_path = None
+        self.loaded_key = None
+        self.layout = None
+        self.model_scale = None
+
+    def is_alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None and self.conn is not None
+
+    def start(self):
+        if self.is_alive():
+            return
+        self.stop()
+
+        from multiprocessing.connection import Listener
+        fd, self.sock_path = tempfile.mkstemp(prefix="arc_worker_", suffix=".sock")
+        os.close(fd)
+        os.unlink(self.sock_path)
+
+        self.listener = Listener(self.sock_path, family="AF_UNIX")
+
+        args = [sys.executable, _WORKER_SCRIPT, self.sock_path]
+        if _CACHE_DIR:
+            args.append(_CACHE_DIR)
+
+        self.proc = subprocess.Popen(args)
+        self.conn = self.listener.accept()
+        self.listener.close()
+        self.listener = None
+
+    def stop(self):
+        had_proc = self.proc is not None
+        if self.conn is not None:
+            try:
+                self.conn.send({"cmd": "exit"})
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = None
+        if self.listener is not None:
+            try:
+                self.listener.close()
+            except Exception:
+                pass
+            self.listener = None
+        if self.proc is not None:
+            try:
+                self.proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    self.proc.terminate()
+                    self.proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+            self.proc = None
+        if self.sock_path and os.path.exists(self.sock_path):
+            try:
+                os.unlink(self.sock_path)
+            except Exception:
+                pass
+            self.sock_path = None
+        self.loaded_key = None
+        self.layout = None
+        self.model_scale = None
+        return had_proc
+
+    def load_model(self, path: str, precision: str, performance_mode: str):
+        key = (path, os.stat(path).st_mtime_ns, precision, performance_mode)
+        if self.is_alive() and self.loaded_key == key:
+            return self.layout, self.model_scale
+
+        self.start()
+        self.conn.send({
+            "cmd": "load_model",
+            "path": path,
+            "precision": precision,
+            "performance_mode": performance_mode
+        })
+        resp = self.conn.recv()
+        if resp.get("status") != "ok":
+            self.stop()
+            raise RuntimeError(f"Arc OpenVINO worker failed to load model: {resp.get('error')}")
+
+        self.loaded_key = key
+        self.layout = resp["layout"]
+        self.model_scale = resp["scale"]
+        return self.layout, self.model_scale
 
 
-def _load_model(path, precision: str = PrecisionMode.AUTO_FP16, performance_mode: str = PerformanceMode.THROUGHPUT):
-    global _loaded
+_WORKER = _ArcWorkerClient()
+_loaded_wrapper = None
+
+
+def unload_arc_models():
+    """Completely terminate the isolated OpenVINO worker process and release 100% of GPU VRAM."""
+    global _loaded_wrapper
+    had_worker = _WORKER.stop()
+    _loaded_wrapper = None
+    gc.collect()
+    try:
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            torch.xpu.empty_cache()
+    except Exception:
+        pass
+    if had_worker:
+        print("[Arc Super Resolution] Unloaded OpenVINO worker process and reclaimed 100% GPU VRAM.")
+
+
+class ArcOpenVINOInnerModel:
+    """Inner model stub so ComfyUI logging and diagnostics can inspect the model."""
+    def __init__(self, name: str = "ArcSuperResolutionModel"):
+        self.model_name = name
+        self.__class__.__name__ = f"ArcSuperResolution({name})"
+
+
+class ArcOpenVINOModelWrapper:
+    """Wrapper that satisfies ComfyUI's ModelPatcher interface for model management."""
+    def __init__(self, path: str, layout: str, scale: int, precision: str, performance_mode: str):
+        self.path = path
+        self.layout = layout
+        self.scale = scale
+        self.precision = precision
+        self.performance_mode = performance_mode
+        self.load_device = comfy.model_management.get_torch_device()
+        self.parent = None
+        self.clone_base_uuid = f"arc_openvino_{path}"
+        self.model = ArcOpenVINOInnerModel(os.path.basename(path))
+        try:
+            self._size = os.path.getsize(path) * 2  # approximate weights + workspace
+        except Exception:
+            self._size = 250 * 1024 * 1024
+
+    def is_dynamic(self) -> bool:
+        return False
+
+    def loaded_size(self) -> int:
+        return self._size
+
+    def model_size(self) -> int:
+        return self._size
+
+    def current_loaded_device(self):
+        return self.load_device
+
+    def is_clone(self, other) -> bool:
+        return hasattr(other, "clone_base_uuid") and other.clone_base_uuid == self.clone_base_uuid
+
+    def detach(self, unpatch_all: bool = True):
+        pass
+
+
+class ArcLoadedModel:
+    """ComfyUI LoadedModel compatible wrapper tracked in comfy.model_management.current_loaded_models."""
+    def __init__(self, wrapper: ArcOpenVINOModelWrapper):
+        self._patcher = wrapper
+        self.device = wrapper.load_device
+        self.currently_used = True
+        self.model_finalizer = None
+        self._patcher_finalizer = None
+        self._real_model = weakref.ref(wrapper.model)
+
+    @property
+    def model(self):
+        return self._patcher
+
+    def real_model(self):
+        return self._real_model()
+
+    def is_dead(self) -> bool:
+        return self._patcher is None
+
+    def model_memory(self) -> int:
+        return self._patcher.model_size() if self._patcher else 0
+
+    def model_loaded_memory(self) -> int:
+        return self._patcher.loaded_size() if self._patcher else 0
+
+    def model_offloaded_memory(self) -> int:
+        return 0
+
+    def model_memory_required(self, device) -> int:
+        return self.model_memory()
+
+    def model_load(self, lowvram_model_memory=0, force_patch_weights=False):
+        return self.real_model()
+
+    def should_reload_model(self, force_patch_weights=False) -> bool:
+        return False
+
+    def model_unload(self, memory_to_free=None, unpatch_weights=True) -> bool:
+        unload_arc_models()
+        return True
+
+    def model_use_more_vram(self, extra_memory, force_patch_weights=False) -> int:
+        return 0
+
+    def __eq__(self, other):
+        if not hasattr(other, "model"):
+            return False
+        return self.model is other.model
+
+
+if hasattr(comfy.model_management, "unload_all_models"):
+    _orig_unload_all_models = comfy.model_management.unload_all_models
+
+    def _patched_unload_all_models():
+        try:
+            unload_arc_models()
+        except Exception:
+            pass
+        return _orig_unload_all_models()
+
+    comfy.model_management.unload_all_models = _patched_unload_all_models
+
+
+def _load_model(path, precision: str = PrecisionMode.AUTO_FP16.value, performance_mode: str = PerformanceMode.THROUGHPUT.value):
+    global _loaded_wrapper
     key = (path, os.stat(path).st_mtime_ns, precision, performance_mode)
-    if _loaded is not None and _loaded[0] == key:
-        return _loaded[1:]
+    if _WORKER.is_alive() and _WORKER.loaded_key == key and _loaded_wrapper is not None:
+        for m in comfy.model_management.current_loaded_models:
+            if isinstance(m, ArcLoadedModel) and m.model is _loaded_wrapper:
+                m.currently_used = True
+                break
+        return _WORKER.layout, _WORKER.model_scale
 
-    core = _get_core()
-    if "GPU" not in core.get_available_devices():
-        raise RuntimeError(
-            "OpenVINO reports no GPU device. Install the Intel compute runtime "
-            "(OpenCL) for your Arc GPU, e.g. 'intel-opencl-icd' or 'intel-compute-runtime'."
-        )
+    # Free memory from other models before starting worker / compiling
+    try:
+        approx_size = os.path.getsize(path) * 2
+    except Exception:
+        approx_size = 250 * 1024 * 1024
+    comfy.model_management.free_memory(approx_size, comfy.model_management.get_torch_device())
 
-    name = os.path.basename(path)
-    model = core.read_model(path)
-    if len(model.inputs) != 1 or len(model.outputs) != 1:
-        raise ValueError(f"{name}: node supports models with exactly one input and one output")
-    layout = _detect_layout(model, name)
+    layout, model_scale = _WORKER.load_model(path, precision=precision, performance_mode=performance_mode)
+    _loaded_wrapper = ArcOpenVINOModelWrapper(path, layout, model_scale, precision, performance_mode)
 
-    config = {}
-    if precision == PrecisionMode.AUTO_FP16:
-        config["INFERENCE_PRECISION_HINT"] = "f16"
-    elif precision == PrecisionMode.FP32:
-        config["INFERENCE_PRECISION_HINT"] = "f32"
+    comfy.model_management.current_loaded_models[:] = [
+        m for m in comfy.model_management.current_loaded_models if not isinstance(m, ArcLoadedModel)
+    ]
+    loaded_entry = ArcLoadedModel(_loaded_wrapper)
+    comfy.model_management.current_loaded_models.insert(0, loaded_entry)
 
-    if performance_mode == PerformanceMode.THROUGHPUT:
-        config["PERFORMANCE_HINT"] = "THROUGHPUT"
-    else:
-        config["PERFORMANCE_HINT"] = "LATENCY"
-
-    compiled = core.compile_model(model, "GPU", config)
-    req = compiled.create_infer_request()
-    probe = _infer_patch(req, np.zeros((128, 128, 3), np.float32), layout)
-    scale = probe.shape[0] // 128
-    if scale < 1 or probe.shape[:2] != (128 * scale, 128 * scale):
-        raise ValueError(f"{name}: unexpected output shape {probe.shape} for a 128x128 RGB input")
-
-    _loaded = (key, compiled, layout, scale)
-    return compiled, layout, scale
-
-
-def _edge_ramp(size, edge):
-    r = np.ones(size, np.float32)
-    e = min(edge, size // 2)
-    if e > 0:
-        r[:e] = (np.arange(e, dtype=np.float32) + 0.5) / e
-        r[-e:] = np.minimum(r[-e:], r[:e][::-1])
-    return r
-
-
-def _super_resolve(compiled, layout, scale, image, tile, overlap, request=None):
-    if request is None:
-        request = compiled.create_infer_request()
-
-    h, w, c = image.shape
-    th, tw = h * scale, w * scale
-
-    # Fast path: full frame without tiling
-    if tile <= 0 or (tile >= h and tile >= w):
-        return _infer_patch(request, image, layout)
-
-    overlap = min(overlap, tile // 4)
-    step = max(tile - 2 * overlap, 16)
-    edge = overlap * scale
-
-    out = np.zeros((th, tw, c), dtype=np.float32)
-    weight = np.zeros((th, tw, 1), dtype=np.float32)
-
-    for y in range(0, h, step):
-        for x in range(0, w, step):
-            y0 = max(0, y - overlap)
-            x0 = max(0, x - overlap)
-            y1 = min(h, y + step + overlap)
-            x1 = min(w, x + step + overlap)
-
-            patch = image[y0:y1, x0:x1]
-            up = _infer_patch(request, patch, layout)
-
-            ph, pw = up.shape[:2]
-            ry = _edge_ramp(ph, edge) if y0 > 0 or y1 < h else np.ones(ph, np.float32)
-            rx = _edge_ramp(pw, edge) if x0 > 0 or x1 < w else np.ones(pw, np.float32)
-            wpatch = (ry[:, None] * rx[None, :])[:, :, None]
-
-            oy0, ox0 = y0 * scale, x0 * scale
-            oy1, ox1 = oy0 + ph, ox0 + pw
-            out[oy0:oy1, ox0:ox1] += up * wpatch
-            weight[oy0:oy1, ox0:ox1] += wpatch
-
-    np.maximum(weight, 1e-6, out=weight)
-    out /= weight
-    return out
+    return layout, model_scale
 
 
 def _get_model_names():
@@ -266,7 +394,7 @@ class ArcSuperResolution:
         if path is None:
             raise FileNotFoundError(f"'{model_name}' not found in models/openvino_upscalers")
 
-        compiled, layout, model_scale = _load_model(path, precision=precision, performance_mode=performance_mode)
+        layout, model_scale = _load_model(path, precision=precision, performance_mode=performance_mode)
 
         if resize_type == UpscaleType.MODEL_NATIVE.value:
             out_w, out_h = int(w * model_scale), int(h * model_scale)
@@ -277,58 +405,79 @@ class ArcSuperResolution:
         else:
             raise ValueError(f"Unsupported resize type: {resize_type}")
 
+        in_bytes = b * h * w * c * 4
         out_bytes = b * out_h * out_w * c * 4
         available = psutil.virtual_memory().available
-        spill = None
+
+        spill_path = None
+        out_shm = None
         if out_bytes > available // 2:
             fd, spill_path = tempfile.mkstemp(suffix=".f32", dir=folder_paths.get_temp_directory())
             os.close(fd)
-            spill = np.memmap(spill_path, dtype=np.float32, mode="w+", shape=(b, out_h, out_w, c))
+            with open(spill_path, "wb") as f:
+                f.truncate(out_bytes)
         else:
-            out_tensor = torch.empty((b, out_h, out_w, c), dtype=torch.float32)
+            out_shm = shared_memory.SharedMemory(create=True, size=out_bytes)
 
-        pbar = comfy.utils.ProgressBar(b)
-        req = compiled.create_infer_request()
+        in_shm = shared_memory.SharedMemory(create=True, size=in_bytes)
+        try:
+            in_arr = np.ndarray((b, h, w, c), dtype=np.float32, buffer=in_shm.buf)
+            in_arr[:] = images.cpu().numpy()
 
-        t_start = time.perf_counter()
-        last_log_time = t_start
+            _WORKER.conn.send({
+                "cmd": "upscale",
+                "in_shm_name": in_shm.name,
+                "in_shape": (b, h, w, c),
+                "out_shm_name": out_shm.name if out_shm else None,
+                "out_shape": (b, out_h, out_w, c),
+                "spill_path": spill_path,
+                "tile_size": tile_size,
+                "tile_overlap": tile_overlap,
+                "target_w": out_w,
+                "target_h": out_h
+            })
 
-        for i in range(b):
-            comfy.model_management.throw_exception_if_processing_interrupted()
+            pbar = comfy.utils.ProgressBar(b)
+            t_start = time.perf_counter()
+            last_log_time = t_start
 
-            frame_np = images[i].cpu().numpy()
-            up = _super_resolve(compiled, layout, model_scale, frame_np, tile_size, tile_overlap, request=req)
+            while True:
+                comfy.model_management.throw_exception_if_processing_interrupted()
+                if _WORKER.conn.poll(0.05):
+                    msg = _WORKER.conn.recv()
+                    if msg.get("status") == "error":
+                        raise RuntimeError(f"Arc Super Resolution worker error: {msg.get('error')}\n{msg.get('traceback', '')}")
+                    elif msg.get("status") == "progress":
+                        i = msg["frame"]
+                        pbar.update(1)
+                        now = time.perf_counter()
+                        if (now - last_log_time >= 1.0) or (i == b - 1):
+                            elapsed = now - t_start
+                            fps = (i + 1) / elapsed if elapsed > 0 else 0.0
+                            pct = ((i + 1) / b) * 100.0
+                            remaining = (b - (i + 1)) / fps if fps > 0 else 0.0
+                            print(f"[Arc Super Resolution] Frame {i + 1}/{b} ({pct:.1f}%) | {fps:.2f} fps | ETA: {remaining:.1f}s")
+                            last_log_time = now
+                    elif msg.get("status") == "done":
+                        break
 
-            if (up.shape[1], up.shape[0]) != (out_w, out_h):
-                t = torch.from_numpy(up).permute(2, 0, 1)[None]
-                t = torch.nn.functional.interpolate(t, size=(out_h, out_w), mode="bicubic", align_corners=False, antialias=True)
-                up = t[0].permute(1, 2, 0).numpy()
-
-            np.clip(up, 0.0, 1.0, out=up)
-            if spill is None:
-                out_tensor[i] = torch.from_numpy(np.ascontiguousarray(up))
+            if spill_path is not None:
+                storage = torch.UntypedStorage.from_file(spill_path, False, out_bytes)
+                out_tensor = torch.empty((b, out_h, out_w, c), dtype=torch.float32)
+                out_tensor.set_(storage, 0, (b, out_h, out_w, c))
+                weakref.finalize(out_tensor, _cleanup_spill, spill_path)
             else:
-                spill[i] = up
-            pbar.update(1)
+                out_arr = np.ndarray((b, out_h, out_w, c), dtype=np.float32, buffer=out_shm.buf)
+                out_tensor = torch.from_numpy(out_arr.copy())
 
-            now = time.perf_counter()
-            if (now - last_log_time >= 1.0) or (i == b - 1):
-                elapsed = now - t_start
-                fps = (i + 1) / elapsed if elapsed > 0 else 0.0
-                pct = ((i + 1) / b) * 100.0
-                remaining = (b - (i + 1)) / fps if fps > 0 else 0.0
-                print(f"[Arc Super Resolution] Frame {i + 1}/{b} ({pct:.1f}%) | {fps:.2f} fps | ETA: {remaining:.1f}s")
-                last_log_time = now
+            return (out_tensor,)
 
-        if spill is not None:
-            spill.flush()
-            del spill
-            storage = torch.UntypedStorage.from_file(spill_path, False, out_bytes)
-            out_tensor = torch.empty((b, out_h, out_w, c), dtype=torch.float32)
-            out_tensor.set_(storage, 0, (b, out_h, out_w, c))
-            weakref.finalize(out_tensor, _cleanup_spill, spill_path)
-
-        return (out_tensor,)
+        finally:
+            in_shm.close()
+            in_shm.unlink()
+            if out_shm is not None:
+                out_shm.close()
+                out_shm.unlink()
 
 
 class ArcResampleFPS:
@@ -370,4 +519,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ArcResampleFPS": "Arc Resample FPS",
 }
 
-__all__ = ["ArcSuperResolution", "ArcResampleFPS", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+__all__ = ["ArcSuperResolution", "ArcResampleFPS", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "unload_arc_models"]
