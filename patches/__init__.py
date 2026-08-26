@@ -2,7 +2,7 @@
 
 import logging
 
-log = logging.getLogger("ComfyUI-Intel-Arc-Suite.Patches")
+log = logging.getLogger("ComfyUI-Nacholmo-xpu-vibeslop.Patches")
 
 
 def apply_vram_guard():

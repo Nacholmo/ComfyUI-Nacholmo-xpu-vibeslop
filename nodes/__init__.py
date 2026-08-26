@@ -2,7 +2,7 @@
 
 import logging
 
-log = logging.getLogger("ComfyUI-Intel-Arc-Suite")
+log = logging.getLogger("ComfyUI-Nacholmo-xpu-vibeslop")
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}

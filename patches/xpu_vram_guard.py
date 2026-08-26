@@ -8,7 +8,7 @@ ComfyUI recover (unload models, retry) instead of freezing the desktop.
 import logging
 import os
 
-log = logging.getLogger("ComfyUI-Intel-Arc-Suite.VRAMGuard")
+log = logging.getLogger("ComfyUI-Nacholmo-xpu-vibeslop.VRAMGuard")
 
 _APPLIED = False
 

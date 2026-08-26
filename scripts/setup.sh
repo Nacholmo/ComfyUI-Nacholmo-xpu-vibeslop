@@ -2,7 +2,7 @@
 set -e
 
 echo "======================================================="
-echo "   ComfyUI Intel Arc & XPU Suite - Setup & Restore     "
+echo "   ComfyUI Nacholmo XPU Vibeslop - Setup & Restore     "
 echo "======================================================="
 
 # Parse arguments

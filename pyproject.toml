@@ -1,5 +1,5 @@
 [project]
-name = "comfyui-intel-arc-suite"
+name = "comfyui-nacholmo-xpu-vibeslop"
 description = "Comprehensive Intel Arc & XPU performance and custom node toolkit for ComfyUI"
 version = "1.0.0"
 authors = [
@@ -16,5 +16,5 @@ dependencies = [
 ]
 
 [tool.comfy]
-DisplayName = "Intel Arc & XPU Suite"
+DisplayName = "Nacholmo XPU Vibeslop"
 Icon = ""

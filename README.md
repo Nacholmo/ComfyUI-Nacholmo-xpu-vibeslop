@@ -1,8 +1,6 @@
-# ComfyUI Intel Arc & XPU Suite
+# ComfyUI Nacholmo XPU Vibeslop
 
 A comprehensive, unified performance toolkit, custom node suite, and launcher environment for running **ComfyUI** on **Intel Arc GPUs** (Alchemist, Battlemage Xe2, Xe-LPG/HPG) and PyTorch XPU.
-
-Designed as an all-in-one "dotfiles & node pack" to restore your complete custom Intel Arc setup onto any fresh, vanilla ComfyUI installation with a single command.
 
 ---
 
@@ -73,16 +71,16 @@ Designed as an all-in-one "dotfiles & node pack" to restore your complete custom
 
 2. Clone this suite into `custom_nodes/`:
    ```bash
-   git clone <YOUR_REPO_URL> custom_nodes/ComfyUI-Intel-Arc-Suite
+   git clone <YOUR_REPO_URL> custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop
    ```
 
 3. Run the setup script:
    ```bash
    # Standard setup:
-   ./custom_nodes/ComfyUI-Intel-Arc-Suite/scripts/setup.sh
+   ./custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/scripts/setup.sh
 
    # Or setup with optional companions (AIMDO DynamicVRAM + VideoHelperSuite):
-   ./custom_nodes/ComfyUI-Intel-Arc-Suite/scripts/setup.sh --all
+   ./custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/scripts/setup.sh --all
    ```
 
 4. Launch ComfyUI:
@@ -110,7 +108,7 @@ While this suite is fully standalone, the following companion custom nodes are r
 ## Directory Structure
 
 ```text
-ComfyUI-Intel-Arc-Suite/
+ComfyUI-Nacholmo-xpu-vibeslop/
 ├── .gitignore
 ├── LICENSE
 ├── README.md
@@ -160,13 +158,13 @@ To convert PyTorch upscale models (`.pth` or `.safetensors`) into OpenVINO ONNX 
 
 ```bash
 # Convert all models found in upscale_models directories:
-python custom_nodes/ComfyUI-Intel-Arc-Suite/tools/convert_upscale_models.py
+python custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/tools/convert_upscale_models.py
 
 # Convert specific models:
-python custom_nodes/ComfyUI-Intel-Arc-Suite/tools/convert_upscale_models.py path/to/model.pth
+python custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/tools/convert_upscale_models.py path/to/model.pth
 
 # Force re-conversion:
-python custom_nodes/ComfyUI-Intel-Arc-Suite/tools/convert_upscale_models.py --force
+python custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/tools/convert_upscale_models.py --force
 ```
 
 ---

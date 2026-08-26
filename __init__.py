@@ -1,5 +1,5 @@
 """
-ComfyUI Intel Arc & XPU Suite
+ComfyUI Nacholmo XPU Vibeslop
 ─────────────────────────────
 Unified enhancement and performance toolkit for Intel Arc GPUs & PyTorch XPU.
 
