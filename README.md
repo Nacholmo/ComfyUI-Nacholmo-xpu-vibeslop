@@ -18,10 +18,11 @@ Designed as an all-in-one "dotfiles & node pack" to restore your complete custom
   - Zero-latency compiled binary disk caching (`.cache/`).
 - **Arc Resample FPS (`ArcResampleFPS`)**:
   - Resamples image/video batches to a target frame rate (e.g. 72fps down to 60fps) while locking exact duration and preserving audio sync.
-- **WINT8 Suite (`WINT8ModelQuantizer`, `WINT8ModelLoader`, `WINT8LoRALoader`, `WINT8LoRAStack`)**:
-  - Pure PyTorch INT8 per-row UNet quantization and loading.
+- **WINT8 Suite (Linux Port)** (`WINT8ModelQuantizer`, `WINT8ModelLoader`, `WINT8LoRALoader`, `WINT8LoRAStack`):
+  - Pure PyTorch INT8 per-row UNet quantization and loading (50% VRAM reduction).
   - Multi-LoRA stacking (up to 5 LoRAs) baked directly onto INT8 weights.
   - Custom XPU-accelerated GEMM kernels with Hadamard rotations (QuaRot).
+  - **Linux Port Enhancements**: Auto-detects Intel oneAPI `icpx`, removes Windows BAT/.pth injection requirements, and natively supports modern Linux Triton >= 3.8 / PyTorch XPU.
 - **TorchCompile Blockwise (`TorchCompileBlockwise`)**:
   - Compiles transformer blocks individually with `torch.compile` / Inductor.
   - Automatically adds Dynamo graph-breaks at ComfyUI memory boundaries for LowVRAM / offloading safety.
@@ -48,6 +49,7 @@ Designed as an all-in-one "dotfiles & node pack" to restore your complete custom
   - Relaxed Level Zero single-allocation limits (`UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1`).
   - Persistent Inductor compilation cache (`TORCHINDUCTOR_FX_GRAPH_CACHE=1`).
   - Tuned allocator configuration (`PYTORCH_ALLOC_CONF="expandable_segments:True,garbage_collection_threshold:0.85"`).
+  - Auto-configures companion paths (`ComfyUI-AIMDO-XPU`).
 - **`tools/convert_upscale_models.py`**:
   - CLI batch tool to convert PyTorch upscale models (`.pth` / `.safetensors`) into OpenVINO ONNX models with automated output verification.
 - **`scripts/setup.sh`**:
@@ -76,13 +78,32 @@ Designed as an all-in-one "dotfiles & node pack" to restore your complete custom
 
 3. Run the setup script:
    ```bash
+   # Standard setup:
    ./custom_nodes/ComfyUI-Intel-Arc-Suite/scripts/setup.sh
+
+   # Or setup with optional companions (AIMDO DynamicVRAM + VideoHelperSuite):
+   ./custom_nodes/ComfyUI-Intel-Arc-Suite/scripts/setup.sh --all
    ```
 
 4. Launch ComfyUI:
    ```bash
    ./launch_xpu.sh
    ```
+
+---
+
+## Recommended Companion Custom Nodes
+
+While this suite is fully standalone, the following companion custom nodes are recommended for specific workflows:
+
+1. **[ComfyUI-AIMDO-XPU](https://github.com/allanmeng/ComfyUI-AIMDO-XPU)** (by Allan Meng):
+   - Intel XPU replacement for `comfy-aimdo` DynamicVRAM offloading.
+   - Install with: `git clone https://github.com/allanmeng/ComfyUI-AIMDO-XPU custom_nodes/ComfyUI-AIMDO-XPU`
+   - `scripts/launch_xpu.sh` automatically detects and injects it into `PYTHONPATH`.
+
+2. **[ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite)** (by Kosinkadink):
+   - Required by `VideoCombineSync` for full video loading and frame sequence combining.
+   - Install with: `git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite custom_nodes/comfyui-videohelpersuite`
 
 ---
 
@@ -104,7 +125,8 @@ ComfyUI-Intel-Arc-Suite/
 │   ├── torch_compile_model.py                 # LowVRAM blockwise torch.compile
 │   ├── upscale_model_video.py                 # Batched video upscaling + compile
 │   ├── video_combine_sync.py                  # Video Combine with atempo audio sync
-│   └── wint8/                                 # WINT8 Quantization & LoRA Suite
+│   └── wint8/                                 # WINT8 Suite (Linux Port)
+│       ├── LICENSE                            # MIT License (JWLHS)
 │       ├── __init__.py
 │       ├── wint8_model_quantizer.py
 │       ├── wint8_model_loader.py
@@ -149,15 +171,8 @@ python custom_nodes/ComfyUI-Intel-Arc-Suite/tools/convert_upscale_models.py --fo
 
 ---
 
-## System Requirements
+## Acknowledgments & Licenses
 
-- **OS**: Linux (kernel 6.8+ recommended for Intel Arc Battlemage / Alchemist)
-- **Intel Compute Runtime**: `intel-opencl-icd` / `intel-compute-runtime`
-- **PyTorch**: PyTorch with XPU support (`torch>=2.4.0` with `--index-url https://download.pytorch.org/whl/xpu`)
-- **OpenVINO**: `openvino>=2024.0.0`
-
----
-
-## License
-
-Apache License 2.0. See [LICENSE](LICENSE) for details.
+- **Toolkit Core & Integrations**: Licensed under Apache-2.0.
+- **WINT8 Suite**: Derived from [JWLHS/ComfyUI-WINT8-XPU](https://github.com/JWLHS/ComfyUI-WINT8-XPU) under the **MIT License** (Copyright (c) 2026 JWLHS), ported to Linux and tuned for Intel Arc B580.
+- **Video Combine Sync**: Extends [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) with duration-matching atempo audio filter chaining.

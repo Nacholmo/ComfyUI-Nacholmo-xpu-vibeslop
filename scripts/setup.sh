@@ -5,6 +5,27 @@ echo "======================================================="
 echo "   ComfyUI Intel Arc & XPU Suite - Setup & Restore     "
 echo "======================================================="
 
+# Parse arguments
+WITH_AIMDO=0
+WITH_VHS=0
+for arg in "$@"; do
+    case $arg in
+        --with-aimdo)
+            WITH_AIMDO=1
+            shift
+            ;;
+        --with-vhs)
+            WITH_VHS=1
+            shift
+            ;;
+        --all)
+            WITH_AIMDO=1
+            WITH_VHS=1
+            shift
+            ;;
+    esac
+done
+
 # Find ComfyUI root directory
 COMFY_ROOT=""
 if [ -f "./main.py" ] && [ -f "./execution.py" ]; then
@@ -52,9 +73,23 @@ if [ -n "$COMFY_ROOT" ]; then
     else
         echo "[*] launch_xpu.sh already exists in ComfyUI root."
     fi
+
+    # 3. Optional companion nodes
+    if [ "$WITH_AIMDO" -eq 1 ] && [ ! -d "$COMFY_ROOT/custom_nodes/ComfyUI-AIMDO-XPU" ]; then
+        echo "[+] Cloning ComfyUI-AIMDO-XPU companion repository..."
+        git clone https://github.com/allanmeng/ComfyUI-AIMDO-XPU "$COMFY_ROOT/custom_nodes/ComfyUI-AIMDO-XPU"
+    fi
+
+    if [ "$WITH_VHS" -eq 1 ] && [ ! -d "$COMFY_ROOT/custom_nodes/comfyui-videohelpersuite" ]; then
+        echo "[+] Cloning comfyui-videohelpersuite companion repository..."
+        git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite "$COMFY_ROOT/custom_nodes/comfyui-videohelpersuite"
+        if [ -f "$COMFY_ROOT/custom_nodes/comfyui-videohelpersuite/requirements.txt" ]; then
+            pip install -r "$COMFY_ROOT/custom_nodes/comfyui-videohelpersuite/requirements.txt"
+        fi
+    fi
 fi
 
-# 3. Environment verification
+# 4. Environment verification
 echo ""
 echo "--- Environment Check ---"
 python -c "
