@@ -1,5 +1,5 @@
 > **Note**: Stuff that I vibecoded for myself. If you are looking for hand-written code, look somewhere else lmao
-> (Derived only from Apache-2.0 and MIT licensed code, attributed at the end of this README).
+> (Derived only from Apache-2.0, MIT, and CC0-1.0 licensed code, attributed at the end of this README).
 
 # ComfyUI Nacholmo XPU Vibeslop
 
@@ -212,5 +212,6 @@ python custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/tools/convert_upscale_models.p
 ## Acknowledgments & Licenses
 
 - **Toolkit Core & Integrations**: Licensed under Apache-2.0.
+- **DarkComfyX Theme**: Color palette and userstyle design inspired by & ported from [Dark4chanX](https://uso.kkx.one/style/229613) by myi pfdll / eXoNecro, dedicated under the **Creative Commons Zero v1.0 Universal (CC0-1.0)** Public Domain Dedication.
 - **WINT8 Suite**: Derived from [JWLHS/ComfyUI-WINT8-XPU](https://github.com/JWLHS/ComfyUI-WINT8-XPU) under the **MIT License** (Copyright (c) 2026 JWLHS), ported to Linux and tuned for Intel Arc B580.
 - **Video Combine Sync**: Extends [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) with duration-matching atempo audio filter chaining.
