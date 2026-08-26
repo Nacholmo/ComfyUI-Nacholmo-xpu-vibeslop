@@ -1,0 +1,348 @@
+/* ==========================================================================
+   DarkComfyX user.css for ComfyUI (DSH OG Aesthetic)
+   Copy this file to:
+     - Linux: ~/.config/ComfyUI/user/user.css  (or ComfyUI/user/default/user.css)
+     - Windows: %APPDATA%/ComfyUI/user/user.css (or ComfyUI/user/default/user.css)
+     - macOS: ~/ComfyUI/user/user.css
+   ========================================================================== */
+
+/* ── 1. Global CSS Custom Properties ───────────────────────────────────── */
+:root {
+  --dcx-bg-base: #191919 !important;
+  --dcx-bg-layer1: #212121 !important;
+  --dcx-bg-layer2: #232323 !important;
+  --dcx-bg-overlay: #262626 !important;
+  --dcx-bg-input: #181818 !important;
+  --dcx-border-l1: #262626 !important;
+  --dcx-border-l2: #353535 !important;
+  --dcx-brand-primary: #527D4C !important;
+  --dcx-brand-accent: #498152 !important;
+  --dcx-brand-bright: #85B76F !important;
+  --dcx-label-primary: #C3C3C3 !important;
+  --dcx-label-secondary: #838383 !important;
+  --dcx-label-muted: #747474 !important;
+  --dcx-state-warn: #CB975B !important;
+  --dcx-state-error: #D03D3D !important;
+  --dcx-link: #9BAED2 !important;
+  --dcx-link-hover: #B8A7C3 !important;
+
+  /* ComfyUI core token overrides */
+  --bg-color: #191919 !important;
+  --fg-color: #C3C3C3 !important;
+  --comfy-menu-bg: #212121 !important;
+  --comfy-menu-secondary-bg: #1D1D1D !important;
+  --comfy-input-bg: #181818 !important;
+  --input-text: #C3C3C3 !important;
+  --border-color: #262626 !important;
+  --content-bg: #212121 !important;
+  --content-fg: #C3C3C3 !important;
+  --content-hover-bg: #282828 !important;
+  --content-hover-fg: #FFFFFF !important;
+}
+
+/* ── 2. Signature DSH Green-on-Dark Scrollbars ─────────────────────────── */
+::-webkit-scrollbar {
+  width: 10px !important;
+  height: 10px !important;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(84, 204, 102, 0.4) !important;
+  border-radius: 2px !important;
+  box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.2) !important;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(84, 204, 102, 0.65) !important;
+}
+
+::-webkit-scrollbar-track {
+  background: #2C2C2C !important;
+  box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.1) !important;
+}
+
+::-webkit-scrollbar-corner {
+  background-color: #3A3939 !important;
+}
+
+* {
+  scrollbar-color: rgba(84, 204, 102, 0.4) #2C2C2C !important;
+  scrollbar-width: thin !important;
+}
+
+/* ── 3. Subtle 2px Corner Rounding & Base Typography ───────────────────── */
+body, #app, #root, .comfy-body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif !important;
+  color: #C3C3C3 !important;
+  background-color: #191919 !important;
+}
+
+/* 2px sharp corners matching DSH design */
+.comfy-menu,
+.comfyui-menu,
+.comfy-floating-menu,
+.comfy-modal,
+.comfy-dialog,
+.p-dialog,
+.p-overlaypanel,
+.p-menu,
+.p-tieredmenu,
+.p-button,
+.comfy-btn,
+.comfy-menu-btn,
+.comfy-input,
+.comfy-multiline-input,
+.litecontextmenu,
+.litegraph .dialog,
+.p-inputtext,
+.p-dropdown,
+.p-multiselect,
+.p-card,
+.side-bar-button,
+.side-tool-bar-container,
+.floating-item,
+.node-toolbar {
+  border-radius: 2px !important;
+}
+
+/* ── 4. Header Bar with Clover Banner & Green Top Accent ───────────────── */
+#comfy-topbar,
+.comfy-topbar,
+header.comfy-header,
+.comfyui-menu:not(.comfy-floating-menu),
+.comfy-menu:not(.comfy-floating-menu) {
+  background-color: #191919 !important;
+  background-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(25, 25, 25, 0.45) 30%,
+    rgba(25, 25, 25, 0.85) 65%,
+    #191919 85%,
+    #191919 100%
+  ),
+  url("https://github.com/eXo-Necro/Files/blob/master/4chan/Trefle-background.jpg?raw=true") !important;
+  background-position: 0 0, 100% 80% !important;
+  background-size: 100% 100%, cover !important;
+  background-repeat: no-repeat, no-repeat !important;
+  border-top: 3px solid #498152 !important;
+  border-bottom: 1px solid #262626 !important;
+  box-shadow: 0px 2px 6px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Header Tabs */
+.comfyui-menu .workflow-tab,
+.comfy-menu-tab,
+.comfy-tab {
+  border-radius: 2px 2px 0 0 !important;
+  color: #838383 !important;
+  background: transparent !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  padding: 4px 12px !important;
+  transition: color 0.15s ease !important;
+}
+
+.comfyui-menu .workflow-tab:hover,
+.comfy-menu-tab:hover {
+  color: #FFFFFF !important;
+}
+
+.comfyui-menu .workflow-tab.active,
+.comfy-menu-tab.active,
+.comfyui-menu [data-state="active"] {
+  color: #FFFFFF !important;
+  background: #212121 !important;
+  border-bottom: 2px solid #527D4C !important;
+  font-weight: 600 !important;
+}
+
+/* ── 5. Action Buttons & Run/Queue Controls ─────────────────────────────── */
+/* Standard Top bar buttons (Manager, Undo, Redo, Share, etc.) */
+.comfyui-menu button:not(#queue-button):not(.comfy-queue-btn),
+#comfy-topbar button:not(#queue-button):not(.comfy-queue-btn),
+.side-tool-bar-container button,
+button.comfy-btn:not(.primary),
+button.p-button.p-button-secondary {
+  background: #212121 !important;
+  border: 1px solid #333333 !important;
+  color: #C3C3C3 !important;
+  border-radius: 2px !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  padding: 4px 8px !important;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease !important;
+}
+
+.comfyui-menu button:not(#queue-button):not(.comfy-queue-btn):hover,
+#comfy-topbar button:not(#queue-button):not(.comfy-queue-btn):hover,
+.side-tool-bar-container button:hover,
+button.comfy-btn:not(.primary):hover,
+button.p-button.p-button-secondary:hover {
+  background: #2E2E2E !important;
+  border-color: #444444 !important;
+  color: #FFFFFF !important;
+}
+
+/* Signature DSH Green Run / Queue button */
+#queue-button,
+.comfy-queue-btn,
+button.p-button-primary,
+button[aria-label*="Queue" i],
+button:has(> .pi-play) {
+  background: #527D4C !important;
+  border: 1px solid #498152 !important;
+  color: #FFFFFF !important;
+  font-weight: 700 !important;
+  border-radius: 2px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3) !important;
+}
+
+#queue-button:hover,
+.comfy-queue-btn:hover,
+button.p-button-primary:hover {
+  background: #5E8F57 !important;
+  border-color: #527D4C !important;
+  box-shadow: 0 0 8px rgba(82, 125, 76, 0.6) !important;
+}
+
+/* Floating Node Toolbar */
+.litegraph-floating-panel,
+.node-toolbar,
+div:has(> button[aria-label*="Delete" i]) {
+  background: #212121 !important;
+  border: 1px solid #2E2E2E !important;
+  border-radius: 2px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* ── 6. Sidebars & Left Dock ───────────────────────────────────────────── */
+.comfy-side-bar,
+.side-tool-bar-container,
+.side-bar-container,
+.p-sidebar {
+  background-color: #191919 !important;
+  border-right: 1px solid #262626 !important;
+}
+
+.side-bar-button:hover,
+.side-tool-bar-container button:hover {
+  background-color: #262626 !important;
+  color: #FFFFFF !important;
+}
+
+.side-bar-button-selected,
+.side-bar-button[data-state="active"] {
+  background-color: #212121 !important;
+  border-left: 2px solid #527D4C !important;
+  color: #FFFFFF !important;
+}
+
+/* ── 7. Inputs, Textareas & Monospace Code ──────────────────────────────── */
+input[type="text"],
+input[type="number"],
+input[type="search"],
+textarea,
+.comfy-input,
+.comfy-multiline-input,
+.p-inputtext,
+.p-dropdown {
+  background: #181818 !important;
+  border: 1px solid #262626 !important;
+  color: #C3C3C3 !important;
+  font-family: "SF Mono", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, Courier, monospace !important;
+  font-size: 12px !important;
+  border-radius: 2px !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+
+input:focus,
+textarea:focus,
+.comfy-input:focus,
+.comfy-multiline-input:focus,
+.p-inputtext:focus {
+  border-color: #527D4C !important;
+  box-shadow: 0 0 0 1px #527D4C !important;
+  outline: none !important;
+}
+
+/* ── 8. Context Menus, Dialogs & Modals ────────────────────────────────── */
+.litecontextmenu {
+  background: #262626 !important;
+  border: 1px solid #353535 !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+  border-radius: 2px !important;
+  padding: 4px 0 !important;
+}
+
+.litecontextmenu .litemenu-entry {
+  color: #C3C3C3 !important;
+  font-size: 12px !important;
+  padding: 4px 12px !important;
+}
+
+.litecontextmenu .litemenu-entry:hover,
+.litecontextmenu .litemenu-entry.selected {
+  background: #353535 !important;
+  color: #FFFFFF !important;
+  border-left: 2px solid #527D4C !important;
+}
+
+.litegraph .dialog,
+.comfy-modal,
+.comfy-dialog,
+.p-dialog {
+  background: #212121 !important;
+  border: 1px solid #353535 !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6) !important;
+  border-radius: 2px !important;
+  color: #C3C3C3 !important;
+}
+
+.comfy-modal-header,
+.p-dialog-header {
+  border-bottom: 1px solid #262626 !important;
+  color: #CB975B !important;
+  font-weight: 700 !important;
+}
+
+/* ── 9. Links, Badges, Greentext & Highlights ──────────────────────────── */
+a, .comfy-link {
+  color: #9BAED2 !important;
+  text-decoration: none !important;
+}
+
+a:hover, .comfy-link:hover {
+  color: #B8A7C3 !important;
+  text-decoration: underline !important;
+}
+
+code, pre {
+  font-family: "SF Mono", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace !important;
+  background: #1D1D1D !important;
+  border: 1px solid #2C2C2C !important;
+  color: #C3C3C3 !important;
+  border-radius: 2px !important;
+}
+
+/* DSH Greentext Highlighting */
+.darkcomfyx-greentext,
+blockquote {
+  color: #85B76F !important;
+  text-shadow: rgba(0, 0, 0, 0.8) 0px 0px 3px !important;
+  font-weight: 500 !important;
+}
+
+blockquote {
+  border-left: 2px solid #527D4C !important;
+  margin: 4px 0 !important;
+  padding: 0 0 0 10px !important;
+}
+
+/* Gold Headings & Warning Highlights */
+h1, h2, h3, h4, .text-warn, .p-message-warn {
+  color: #CB975B !important;
+}
+
+.text-error, .p-message-error, .comfy-error {
+  color: #D03D3D !important;
+}

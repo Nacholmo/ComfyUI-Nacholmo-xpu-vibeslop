@@ -74,7 +74,13 @@ if [ -n "$COMFY_ROOT" ]; then
         echo "[*] launch_xpu.sh already exists in ComfyUI root."
     fi
 
-    # 3. Optional companion nodes
+    # 3. Install DarkComfyX Theme
+    if [ -f "$SUITE_DIR/tools/install_theme.py" ]; then
+        echo "[+] Installing and configuring DarkComfyX Theme..."
+        python "$SUITE_DIR/tools/install_theme.py"
+    fi
+
+    # 4. Optional companion nodes
     if [ "$WITH_AIMDO" -eq 1 ] && [ ! -d "$COMFY_ROOT/custom_nodes/ComfyUI-AIMDO-XPU" ]; then
         echo "[+] Cloning ComfyUI-AIMDO-XPU companion repository..."
         git clone https://github.com/allanmeng/ComfyUI-AIMDO-XPU "$COMFY_ROOT/custom_nodes/ComfyUI-AIMDO-XPU"

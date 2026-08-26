@@ -48,8 +48,26 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
 - **MiniMax-H3 Memory Override**:
   - Calibrates `MiniMaxH3.memory_usage_factor` from `0.114` to the measured `0.18` working set on Arc B580 to prevent mid-generation OOMs.
 
-### 3. Toolchain & Dotfiles Launcher
+### 3. DarkComfyX Theme & Appearance Port
 
+- **DarkComfyX Theme (`web/js/darkcomfyx_theme.js`, `web/css/darkcomfyx.css`)**:
+  - Full authentic port of the DarkComfyX theme for ComfyUI based on the official [ComfyUI Appearance Guidelines](https://docs.comfy.org/interface/appearance).
+  - **Charcoal Surfaces**: Base canvas `#191919`, node layers `#212121`, input card backgrounds `#181818`.
+  - **4chan X Header Accent**: Clover header banner styling with `#498152` brand green top border.
+  - **Signature Green-on-Dark Scrollbar**: WebKit & Firefox custom scrollbars with `#54cc66` rgba / `#527d4c` thumb and `#2c2c2c` track.
+  - **2px Sharp Rounded Corners**: Subtle, clean 2px borders across dialogs, buttons, context menus, and node cards.
+  - **Periwinkle Links & Gold Warnings**: Soft `#9BAED2` links and `#CB975B` gold headings / warning highlights.
+  - **Live Greentext Highlighter**: Auto-highlights `>...` lines in green (`#85B76F`) across markdown and text prompts.
+  - **Seamless ComfyUI Appearance Integration**:
+    - Auto-registers `darkcomfyx` in `Comfy.CustomColorPalettes`.
+    - Selectable directly via ComfyUI **Settings -> Appearance -> Color Palette -> DarkComfyX**.
+    - Command Palette shortcut: `Apply DarkComfyX Theme`.
+    - Standalone `user.css` and `darkcomfyx_palette.json` files for direct manual/portable use.
+
+### 4. Toolchain & Dotfiles Launcher
+
+- **`tools/install_theme.py`**:
+  - One-click installer that registers DarkComfyX into `comfy.settings.json` and copies `user.css` into your ComfyUI user profile.
 - **`scripts/launch_xpu.sh`**:
   - Optimized driver environment flags (`SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1`, `ZE_FLAT_DEVICE_HIERARCHY=COMPOSITE`, unset `ONEAPI_DEVICE_SELECTOR`).
   - Relaxed Level Zero single-allocation limits (`UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1`).
@@ -151,14 +169,24 @@ ComfyUI-Nacholmo-xpu-vibeslop/
 │   └── minimax_h3_factor.py                   # MiniMax H3 memory factor calibration
 │
 ├── tools/                                     # CLI Utilities
-│   └── convert_upscale_models.py              # PyTorch to OpenVINO ONNX model converter
+│   ├── convert_upscale_models.py              # PyTorch to OpenVINO ONNX model converter
+│   └── install_theme.py                       # DarkComfyX theme installer & configurator
+│
+├── web/                                       # Web Frontend Extensions
+│   ├── js/
+│   │   └── darkcomfyx_theme.js                # Extension logic, settings & greentext
+│   ├── css/
+│   │   └── darkcomfyx.css                     # Complete DarkComfyX stylesheet
+│   └── darkcomfyx_palette.json                # Standalone ComfyUI palette JSON
 │
 ├── scripts/                                   # Launch & Setup Automation
 │   ├── launch_xpu.sh                          # Production Intel Arc B580 launcher
 │   └── setup.sh                               # One-command installer & restorer
 │
-└── config/                                    # Path Configurations
-    └── extra_model_paths.yaml.example         # External storage preset template
+└── config/                                    # Configurations & Theme Presets
+    ├── extra_model_paths.yaml.example         # External storage preset template
+    ├── darkcomfyx_palette.json                # Standalone palette export
+    └── darkcomfyx.user.css                    # Standalone user.css drop-in
 ```
 
 ---
