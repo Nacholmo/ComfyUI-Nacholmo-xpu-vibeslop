@@ -51,6 +51,7 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
   - Persistent Inductor compilation cache (`TORCHINDUCTOR_FX_GRAPH_CACHE=1`).
   - Tuned allocator configuration (`PYTORCH_ALLOC_CONF="expandable_segments:True,garbage_collection_threshold:0.85"`).
   - Auto-configures companion paths (`ComfyUI-AIMDO-XPU`).
+  - Default launch arguments: `--enable-triton-backend --disable-dynamic-vram --reserve-vram 5`.
 - **`tools/convert_upscale_models.py`**:
   - CLI batch tool to convert PyTorch upscale models (`.pth` / `.safetensors`) into OpenVINO ONNX models with automated output verification.
 - **`scripts/setup.sh`**:

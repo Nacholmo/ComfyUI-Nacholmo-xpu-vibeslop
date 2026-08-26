@@ -62,4 +62,11 @@ fi
 # --- VRAM guard: cap the torch XPU allocator below physical VRAM ---
 export XPU_VRAM_FRACTION="${XPU_VRAM_FRACTION:-0.75}"
 
-exec python main.py "$@"
+# Default launch flags for Intel Arc (XPU)
+DEFAULT_ARGS=(
+    "--enable-triton-backend"
+    "--disable-dynamic-vram"
+    "--reserve-vram" "5"
+)
+
+exec python main.py "${DEFAULT_ARGS[@]}" "$@"
