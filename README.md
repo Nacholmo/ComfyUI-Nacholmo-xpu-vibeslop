@@ -5,7 +5,7 @@
 
 A comprehensive, unified performance toolkit, custom node suite, and launcher environment for running **ComfyUI** on **Intel Arc GPUs** (Alchemist, Battlemage Xe2, Xe-LPG/HPG) and PyTorch XPU.
 
-<img width="2048" height="768" alt="Image" src="https://github.com/user-attachments/assets/1ebcc329-9349-47cd-bbcd-ed85713d821d" />
+<img width="1024" height="384" alt="Image" src="https://github.com/user-attachments/assets/38a30e36-85b4-4dc0-8610-3bc5942cb1b7" />
 
 ---
 
