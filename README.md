@@ -68,7 +68,7 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
    cd ComfyUI
    python3 -m venv venv
    source venv/bin/activate
-   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
+   pip install --pre --upgrade torch torchaudio torchvision triton-xpu --extra-index-url https://download.pytorch.org/whl/nightly/xpu
    pip install -r requirements.txt
    ```
 
