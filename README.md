@@ -1,3 +1,6 @@
+> **Note**: Stuff that I vibecoded for myself. If you are looking for hand-written code, look somewhere else!
+> (Derived only from Apache-2.0 and MIT licensed code, attributed at the end of this README).
+
 # ComfyUI Nacholmo XPU Vibeslop
 
 A comprehensive, unified performance toolkit, custom node suite, and launcher environment for running **ComfyUI** on **Intel Arc GPUs** (Alchemist, Battlemage Xe2, Xe-LPG/HPG) and PyTorch XPU.
@@ -71,7 +74,7 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
 
 2. Clone this suite into `custom_nodes/`:
    ```bash
-   git clone <YOUR_REPO_URL> custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop
+   git clone https://github.com/Nacholmo/ComfyUI-Nacholmo-xpu-vibeslop custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop
    ```
 
 3. Run the setup script:
