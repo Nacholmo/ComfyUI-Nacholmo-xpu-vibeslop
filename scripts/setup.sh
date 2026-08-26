@@ -101,6 +101,12 @@ else:
     print('PyTorch XPU: Not detected (ensure intel-compute-runtime and torch-xpu are installed)')
 
 try:
+    import torchaudio
+    print('TorchAudio:', 'Available (Version:', torchaudio.__version__, ')')
+except Exception as e:
+    print('TorchAudio:', 'Error loading:', e)
+
+try:
     import openvino as ov
     core = ov.Core()
     devs = core.get_available_devices()

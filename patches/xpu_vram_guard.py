@@ -7,6 +7,7 @@ ComfyUI recover (unload models, retry) instead of freezing the desktop.
 
 import logging
 import os
+import sys
 
 log = logging.getLogger("ComfyUI-Nacholmo-xpu-vibeslop.VRAMGuard")
 
@@ -31,4 +32,37 @@ def apply():
         log.debug(f"[xpu-vram-guard] could not set memory fraction: {e}")
 
 
-__all__ = ["apply"]
+def install_deferred():
+    """Install hook so VRAM guard is applied as soon as torch is imported, without eagerly importing torch in prestartup."""
+    if "torch" in sys.modules:
+        apply()
+        return
+
+    from importlib.machinery import PathFinder
+
+    class _TorchGuardMetaFinder:
+        @classmethod
+        def find_spec(cls, fullname, path=None, target=None):
+            if fullname == "torch":
+                spec = PathFinder.find_spec(fullname, path, target)
+                if spec and spec.loader:
+                    orig_exec = spec.loader.exec_module
+
+                    def exec_module_patched(module):
+                        orig_exec(module)
+                        try:
+                            apply()
+                        except Exception:
+                            pass
+
+                    spec.loader.exec_module = exec_module_patched
+                return spec
+            return None
+
+    for finder in sys.meta_path:
+        if getattr(finder, "__name__", "") == "_TorchGuardMetaFinder" or finder is _TorchGuardMetaFinder:
+            return
+    sys.meta_path.insert(0, _TorchGuardMetaFinder)
+
+
+__all__ = ["apply", "install_deferred"]

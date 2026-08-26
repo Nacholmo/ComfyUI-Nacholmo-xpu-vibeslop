@@ -12,7 +12,13 @@ if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
 try:
-    from patches.xpu_vram_guard import apply as apply_vram_guard
-    apply_vram_guard()
-except Exception as e:
+    from patches.torchaudio_guard import apply as apply_torchaudio_guard
+    apply_torchaudio_guard()
+except Exception:
+    pass
+
+try:
+    from patches.xpu_vram_guard import install_deferred as install_deferred_vram_guard
+    install_deferred_vram_guard()
+except Exception:
     pass

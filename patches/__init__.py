@@ -5,12 +5,28 @@ import logging
 log = logging.getLogger("ComfyUI-Nacholmo-xpu-vibeslop.Patches")
 
 
+def apply_torchaudio_guard():
+    try:
+        from .torchaudio_guard import apply
+        apply()
+    except Exception as e:
+        log.debug(f"TorchAudio guard not applied: {e}")
+
+
 def apply_vram_guard():
     try:
         from .xpu_vram_guard import apply
         apply()
     except Exception as e:
         log.debug(f"VRAM guard not applied: {e}")
+
+
+def install_deferred_vram_guard():
+    try:
+        from .xpu_vram_guard import install_deferred
+        install_deferred()
+    except Exception as e:
+        log.debug(f"Deferred VRAM guard hook not installed: {e}")
 
 
 def apply_minimax_factor():
@@ -22,8 +38,15 @@ def apply_minimax_factor():
 
 
 def apply_all_patches():
+    apply_torchaudio_guard()
     apply_vram_guard()
     apply_minimax_factor()
 
 
-__all__ = ["apply_vram_guard", "apply_minimax_factor", "apply_all_patches"]
+__all__ = [
+    "apply_torchaudio_guard",
+    "apply_vram_guard",
+    "install_deferred_vram_guard",
+    "apply_minimax_factor",
+    "apply_all_patches",
+]

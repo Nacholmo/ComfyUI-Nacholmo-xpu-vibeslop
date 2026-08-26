@@ -37,6 +37,9 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
 
 ### 2. Runtime Stability & Calibration Patches
 
+- **TorchAudio Guard (`torchaudio_guard.py` / `sitecustomize.py`)**:
+  - Intercepts `torchaudio`'s C++ extension loader to gracefully handle missing CUDA runtime libraries (`libcudart.so`).
+  - Enables pure PyTorch/CPU audio fallback so audio VAEs, audio nodes, and companion extensions run without fatal `libcudart` import crashes on Intel Arc / XPU systems.
 - **VRAM Guard (`xpu_vram_guard.py` / `prestartup_script.py`)**:
   - Automatically caps the PyTorch XPU caching allocator fraction (default: `0.75` / `75%` of VRAM).
   - On Intel Level Zero drivers, exceeding physical VRAM during sudden activation spikes can hard-lock the GPU kernel and freeze the Linux desktop. VRAM Guard intercepts spikes and raises clean, recoverable Python `OutOfMemoryError`s so ComfyUI can safely unload models and recover.
@@ -118,7 +121,8 @@ ComfyUI-Nacholmo-xpu-vibeslop/
 ├── README.md
 ├── pyproject.toml
 ├── requirements.txt
-├── prestartup_script.py                       # Startup hook (activates VRAM Guard)
+├── sitecustomize.py                           # Early Python bootstrap hook
+├── prestartup_script.py                       # ComfyUI startup hook (activates guards)
 ├── __init__.py                                # Root custom node entry point
 │
 ├── nodes/                                     # Node Implementations
@@ -140,6 +144,7 @@ ComfyUI-Nacholmo-xpu-vibeslop/
 │
 ├── patches/                                   # Stability & Memory Patches
 │   ├── __init__.py
+│   ├── torchaudio_guard.py                    # TorchAudio CUDA fallback patch
 │   ├── xpu_vram_guard.py                      # VRAM allocator guard
 │   └── minimax_h3_factor.py                   # MiniMax H3 memory factor calibration
 │

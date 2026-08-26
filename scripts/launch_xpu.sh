@@ -54,7 +54,16 @@ export OPENVINO_TELEMETRY=0
 export UV_LINK_MODE=copy
 export PYTHONWARNINGS="ignore"
 
-# --- Optional AIMDO DynamicVRAM support ---
+# --- Early bootstrap & companion node support ---
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SCRIPT_SOURCE" ]; do
+    SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+    SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+    [[ $SCRIPT_SOURCE != /* ]] && SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+done
+SUITE_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")/.." && pwd)"
+
+export PYTHONPATH="$SUITE_DIR:$PYTHONPATH"
 if [ -d "$PWD/custom_nodes/ComfyUI-AIMDO-XPU" ]; then
     export PYTHONPATH="$PWD/custom_nodes/ComfyUI-AIMDO-XPU:$PYTHONPATH"
 fi
