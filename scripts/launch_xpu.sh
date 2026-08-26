@@ -54,9 +54,20 @@ export OPENVINO_TELEMETRY=0
 export UV_LINK_MODE=copy
 export PYTHONWARNINGS="ignore"
 
+# --- Early bootstrap & companion node support ---
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SCRIPT_SOURCE" ]; do
+    SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+    SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+    [[ $SCRIPT_SOURCE != /* ]] && SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+done
+BOOTSTRAP_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")/bootstrap" && pwd)"
+
+export PYTHONPATH="$BOOTSTRAP_DIR:$PYTHONPATH"
 if [ -d "$PWD/custom_nodes/ComfyUI-AIMDO-XPU" ]; then
     export PYTHONPATH="$PWD/custom_nodes/ComfyUI-AIMDO-XPU:$PYTHONPATH"
 fi
+
 
 # --- VRAM guard: cap the torch XPU allocator below physical VRAM ---
 export XPU_VRAM_FRACTION="${XPU_VRAM_FRACTION:-0.75}"

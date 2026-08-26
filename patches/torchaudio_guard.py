@@ -49,12 +49,47 @@ def apply():
     global _INSTALLED
     if _INSTALLED:
         return
-    for finder in sys.meta_path:
-        if getattr(finder, "__name__", "") == "_TorchAudioMetaFinder" or finder is _TorchAudioMetaFinder:
-            _INSTALLED = True
-            return
-    sys.meta_path.insert(0, _TorchAudioMetaFinder)
+
+    # 1. Install meta finder for future imports of torchaudio
+    already_in_meta = any(
+        getattr(finder, "__name__", "") == "_TorchAudioMetaFinder" or finder is _TorchAudioMetaFinder
+        for finder in sys.meta_path
+    )
+    if not already_in_meta:
+        sys.meta_path.insert(0, _TorchAudioMetaFinder)
+
+    # 2. Patch torchaudio._extension.utils directly if already imported
+    mod = sys.modules.get("torchaudio._extension.utils")
+    if mod and hasattr(mod, "_load_lib"):
+        orig_load_lib = mod._load_lib
+        if not getattr(orig_load_lib, "_nacholmo_patched", False):
+            def safe_load_lib(lib):
+                try:
+                    return orig_load_lib(lib)
+                except Exception as e:
+                    log.debug(f"Intercepted torchaudio extension load failure ({lib}): {e}")
+                    return False
+            safe_load_lib._nacholmo_patched = True
+            mod._load_lib = safe_load_lib
+
+    # 3. Patch torch.ops.load_library if torch is present
+    torch_mod = sys.modules.get("torch")
+    if torch_mod and hasattr(torch_mod, "ops") and hasattr(torch_mod.ops, "load_library"):
+        orig_load_library = torch_mod.ops.load_library
+        if not getattr(orig_load_library, "_nacholmo_patched", False):
+            def safe_load_library(path):
+                try:
+                    return orig_load_library(path)
+                except Exception as e:
+                    if "_torchaudio" in str(path):
+                        log.debug(f"Intercepted torchaudio torch.ops.load_library failure ({path}): {e}")
+                        return
+                    raise
+            safe_load_library._nacholmo_patched = True
+            torch_mod.ops.load_library = safe_load_library
+
     _INSTALLED = True
 
 
 __all__ = ["apply"]
+
