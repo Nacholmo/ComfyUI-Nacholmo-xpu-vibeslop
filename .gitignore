@@ -32,6 +32,7 @@ ENV/
 # Model files & local test outputs
 *.pth
 *.safetensors
+!nodes/h3_silu_temb_grid.safetensors
 *.onnx
 *.xml
 *.bin

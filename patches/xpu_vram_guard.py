@@ -22,7 +22,7 @@ def apply():
         import torch
         if not (hasattr(torch, "xpu") and torch.xpu.is_available()):
             return
-        frac = float(os.environ.get("XPU_VRAM_FRACTION", "0.75"))
+        frac = float(os.environ.get("XPU_VRAM_FRACTION", "0.90"))
         dev_count = torch.xpu.device_count()
         for dev in range(dev_count):
             torch.xpu.set_per_process_memory_fraction(frac, dev)
@@ -30,6 +30,24 @@ def apply():
         print(f"[xpu-vram-guard] allocator capped at {frac:.0%} of VRAM across {dev_count} device(s) (override with XPU_VRAM_FRACTION)")
     except Exception as e:
         log.debug(f"[xpu-vram-guard] could not set memory fraction: {e}")
+
+    try:
+        import comfy.model_management as mm
+
+        def _safe_debug_memory_summary():
+            try:
+                import torch
+                if hasattr(torch, "xpu") and torch.xpu.is_available():
+                    return torch.xpu.memory_summary()
+                elif hasattr(torch, "cuda") and torch.cuda.is_available():
+                    return torch.cuda.memory.memory_summary()
+            except Exception:
+                pass
+            return ""
+
+        mm.debug_memory_summary = _safe_debug_memory_summary
+    except Exception:
+        pass
 
 
 def install_deferred():

@@ -62,4 +62,15 @@ try:
 except Exception as e:
     log.warning(f"[Intel-Arc-Suite] Could not load WINT8 suite: {e}")
 
+# 6. MiniMax-H3 Turbo (Turbo LoRA & 4-Step Sampler)
+try:
+    from .minimax_turbo import (
+        NODE_CLASS_MAPPINGS as _MINIMAX_CLASS_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _MINIMAX_DISPLAY_NAME_MAPPINGS,
+    )
+    NODE_CLASS_MAPPINGS.update(_MINIMAX_CLASS_MAPPINGS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_MINIMAX_DISPLAY_NAME_MAPPINGS)
+except Exception as e:
+    log.warning(f"[Intel-Arc-Suite] Could not load MiniMax-H3 Turbo nodes: {e}")
+
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
