@@ -1,4 +1,4 @@
-> **Note**: Stuff that I vibecoded for myself. If you are looking for hand-written code, look somewhere else!
+> **Note**: Stuff that I vibecoded for myself. If you are looking for hand-written code, look somewhere else lmao
 > (Derived only from Apache-2.0 and MIT licensed code, attributed at the end of this README).
 
 # ComfyUI Nacholmo XPU Vibeslop
