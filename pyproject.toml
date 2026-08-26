@@ -1,0 +1,20 @@
+[project]
+name = "comfyui-intel-arc-suite"
+description = "Comprehensive Intel Arc & XPU performance and custom node toolkit for ComfyUI"
+version = "1.0.0"
+authors = [
+  { name = "Sundae" }
+]
+readme = "README.md"
+license = "Apache-2.0"
+dependencies = [
+  "openvino>=2024.0.0",
+  "psutil",
+  "numpy",
+  "spandrel",
+  "pillow"
+]
+
+[tool.comfy]
+DisplayName = "Intel Arc & XPU Suite"
+Icon = ""

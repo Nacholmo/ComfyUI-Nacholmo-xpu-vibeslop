@@ -1,0 +1,34 @@
+# Config for external Fenix Drive
+fenix_storage:
+    base_path: ~/Drives/Fenix/models
+    # Standard Stable Diffusion models
+    checkpoints: checkpoints
+    vae: vae
+    loras: loras
+    upscale_models: upscale_models
+    embeddings: embeddings
+    hypernetworks: hypernetworks
+    controlnet: controlnet
+    
+    # Newer Architecture (Flux, SD3, SDXL split)
+    unet: unet
+    clip: clip
+    clip_vision: clip_vision
+    diffusion_models: diffusion_models
+    text_encoders: text_encoders
+    
+    # Custom Nodes & Helpers
+    style_models: style_models
+    gligen: gligen
+    configs: configs
+    diffusers: diffusers
+    vae_approx: vae_approx
+    
+    # Specialized / Custom Node Paths
+    photomaker: photomaker
+    facerestore_models: facerestore_models
+    facedetection: facedetection
+    tensorrt: tensorrt
+    LLM: LLM
+    
+    latent_upscale_models: latent_upscale_models

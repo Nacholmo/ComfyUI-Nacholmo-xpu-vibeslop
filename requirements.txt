@@ -1,0 +1,5 @@
+openvino>=2024.0.0
+psutil
+numpy
+spandrel
+pillow
