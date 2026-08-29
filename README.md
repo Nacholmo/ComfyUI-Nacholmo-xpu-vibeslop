@@ -47,8 +47,12 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
 - **VRAM Guard (`xpu_vram_guard.py` / `prestartup_script.py`)**:
   - Automatically caps the PyTorch XPU caching allocator fraction (default: `0.75` / `75%` of VRAM).
   - On Intel Level Zero drivers, exceeding physical VRAM during sudden activation spikes can hard-lock the GPU kernel and freeze the Linux desktop. VRAM Guard intercepts spikes and raises clean, recoverable Python `OutOfMemoryError`s so ComfyUI can safely unload models and recover.
-- **MiniMax-H3 Memory Override**:
+- **MiniMax-H3 Memory Override & Keyframe Auto-Rescale (`patches/minimax_h3_factor.py`)**:
   - Calibrates `MiniMaxH3.memory_usage_factor` from `0.114` to the measured `0.18` working set on Arc B580 to prevent mid-generation OOMs.
+  - Automatically rescales conditioning keyframes/image references when sampling upscaled video latents (e.g. 18x32 -> 36x62), eliminating `shape mismatch [144, 96] vs [558, 96]` errors.
+- **MiniMax-H3 Latent Upscaler XPU Patch (`minimax_upscaler_xpu.py`)**:
+  - Dynamically patches `Comfyui_Minimax_h3_latent_Upscaler` (both 2D and 3D nodes) at runtime via meta-path import hooks and memory guards without modifying the original node files.
+  - Automatically resolves `"xpu"` and seamlessly routes default `"cuda"` calls to Intel Arc XPU, updates node device schemas, and handles XPU VRAM caching cleanup.
 
 ### 3. DarkComfyX Theme & Appearance Port
 

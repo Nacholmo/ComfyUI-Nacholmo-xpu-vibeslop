@@ -70,6 +70,6 @@ fi
 
 
 # --- VRAM guard: cap the torch XPU allocator below physical VRAM ---
-export XPU_VRAM_FRACTION="${XPU_VRAM_FRACTION:-0.90}"
+export XPU_VRAM_FRACTION="${XPU_VRAM_FRACTION:-0.85}"
 
 exec python main.py "$@"

@@ -37,10 +37,19 @@ def apply_minimax_factor():
         log.debug(f"MiniMax factor not applied: {e}")
 
 
+def apply_minimax_upscaler_xpu():
+    try:
+        from .minimax_upscaler_xpu import apply
+        apply()
+    except Exception as e:
+        log.debug(f"MiniMax upscaler XPU patch not applied: {e}")
+
+
 def apply_all_patches():
     apply_torchaudio_guard()
     apply_vram_guard()
     apply_minimax_factor()
+    apply_minimax_upscaler_xpu()
 
 
 __all__ = [
@@ -48,5 +57,6 @@ __all__ = [
     "apply_vram_guard",
     "install_deferred_vram_guard",
     "apply_minimax_factor",
+    "apply_minimax_upscaler_xpu",
     "apply_all_patches",
 ]

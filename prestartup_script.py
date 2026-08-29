@@ -26,3 +26,8 @@ try:
 except Exception:
     pass
 
+try:
+    _load_and_run("patches/minimax_upscaler_xpu.py", "apply")
+except Exception:
+    pass
+
