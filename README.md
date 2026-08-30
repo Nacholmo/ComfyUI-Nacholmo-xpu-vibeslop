@@ -119,7 +119,10 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
 
 4. Launch ComfyUI:
    ```bash
-   ./launch_xpu.sh
+   ./launch_xpu.sh --enable-triton-backend
+   
+    # Or reserve memory to run big models like minimax h3 and ltx2.5
+   ./launch_xpu.sh --enable-triton-backend --reserve-vram 5
    ```
 
 ---
