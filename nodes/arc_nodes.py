@@ -440,11 +440,11 @@ class ArcSuperResolution:
             pbar = comfy.utils.ProgressBar(b)
             t_start = time.perf_counter()
 
-            # Single-line terminal loading bar (in-place, no line spam).
-            # Uses tqdm when available, otherwise falls back to a minimal \r bar.
+            # Single-line terminal bar — clean like sampler: `100%|████| 3/3 [01:39<00:00, 33.33s/it]`
+            # Uses tqdm when available (auto handles rate/ETA), fallback mimics same format without duplication.
             term_pbar = None
             use_tqdm = False
-            last_postfix = t_start
+            last_fallback = t_start
             try:
                 from tqdm.auto import tqdm as _tqdm  # type: ignore
 
@@ -462,6 +462,12 @@ class ArcSuperResolution:
                 term_pbar = None
                 use_tqdm = False
 
+            def _fmt_time(s: float) -> str:
+                s = int(s)
+                m, sec = divmod(s, 60)
+                h, m = divmod(m, 60)
+                return f"{h:02d}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
+
             try:
                 while True:
                     comfy.model_management.throw_exception_if_processing_interrupted()
@@ -472,29 +478,24 @@ class ArcSuperResolution:
                         elif msg.get("status") == "progress":
                             i = msg["frame"]
                             pbar.update(1)
-                            now = time.perf_counter()
                             if use_tqdm and term_pbar is not None:
+                                # Let tqdm render rate + ETA itself — no manual postfix (avoids `1.55frame/s, 1.52 fps, ETA 99.9s` duplication)
                                 term_pbar.update(1)
-                                if (now - last_postfix >= 0.2) or (i == b - 1):
-                                    elapsed = now - t_start
-                                    fps = (i + 1) / elapsed if elapsed > 0 else 0.0
-                                    remaining = (b - (i + 1)) / fps if fps > 0 else 0.0
-                                    term_pbar.set_postfix_str(f"{fps:.2f} fps, ETA {remaining:.1f}s")
-                                    last_postfix = now
                             else:
-                                # Fallback: throttled in-place bar via \r (one line, overwrites itself)
-                                if (now - last_postfix >= 0.5) or (i == b - 1):
+                                # Fallback: throttled in-place bar via \r (one line, overwrites itself) — same clean format as tqdm
+                                now = time.perf_counter()
+                                if (now - last_fallback >= 0.5) or (i == b - 1):
                                     elapsed = now - t_start
                                     fps = (i + 1) / elapsed if elapsed > 0 else 0.0
-                                    pct = ((i + 1) / b) * 100.0
                                     remaining = (b - (i + 1)) / fps if fps > 0 else 0.0
+                                    pct = ((i + 1) / b) * 100
                                     bar_w = 30
                                     filled = int(bar_w * (i + 1) / b)
                                     bar = "█" * filled + "░" * (bar_w - filled)
-                                    msg_str = f"\r[Arc Super Resolution] |{bar}| {i + 1}/{b} ({pct:.1f}%) {fps:.2f} fps ETA: {remaining:.1f}s"
+                                    msg_str = f"\rArc Super Resolution: {pct:3.0f}%|{bar}| {i + 1}/{b} [{_fmt_time(elapsed)}<{_fmt_time(remaining)}, {fps:.2f} frame/s]"
                                     # pad to clear previous longer line
                                     print(msg_str.ljust(100), end="", flush=True)
-                                    last_postfix = now
+                                    last_fallback = now
                                     if i == b - 1:
                                         print()
                         elif msg.get("status") == "done":
@@ -505,9 +506,6 @@ class ArcSuperResolution:
                         term_pbar.close()
                     except Exception:
                         pass
-                elif not use_tqdm and last_postfix != t_start:
-                    # ensure fallback \r bar terminated (already printed newline on last frame)
-                    pass
 
             if spill_path is not None:
                 storage = torch.UntypedStorage.from_file(spill_path, False, out_bytes)
