@@ -73,4 +73,15 @@ try:
 except Exception as e:
     log.warning(f"[Intel-Arc-Suite] Could not load MiniMax-H3 Turbo nodes: {e}")
 
+# 7. MiniMax-H3 Reference to Video (Stride / Lite) – VRAM saver
+try:
+    from .minimax_reference_stride import (
+        NODE_CLASS_MAPPINGS as _MINIMAX_STRIDE_CLASS_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _MINIMAX_STRIDE_DISPLAY_NAME_MAPPINGS,
+    )
+    NODE_CLASS_MAPPINGS.update(_MINIMAX_STRIDE_CLASS_MAPPINGS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_MINIMAX_STRIDE_DISPLAY_NAME_MAPPINGS)
+except Exception as e:
+    log.warning(f"[Intel-Arc-Suite] Could not load MiniMax-H3 Reference Stride node: {e}")
+
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

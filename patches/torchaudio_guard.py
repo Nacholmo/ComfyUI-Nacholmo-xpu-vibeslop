@@ -42,6 +42,34 @@ class _TorchAudioMetaFinder:
 
                 spec.loader.exec_module = exec_module_patched
             return spec
+        if fullname == "torchaudio._extension":
+            spec = PathFinder.find_spec(fullname, path, target)
+            if spec and spec.loader:
+                orig_exec = spec.loader.exec_module
+
+                def exec_module_patched(module):
+                    try:
+                        orig_exec(module)
+                    except (ImportError, AttributeError, OSError) as e:
+                        if "libtorchaudio" in str(e) or "cuda_version" in str(e) or "_torchaudio" in str(e) or "libcudart" in str(e):
+                            log.debug(f"Intercepted torchaudio _extension ImportError/AttributeError: {e}")
+                            # Mark extension as unavailable but allow import to succeed
+                            module._IS_TORCHAUDIO_EXT_AVAILABLE = False
+                            module._IS_ALIGN_AVAILABLE = False
+                            # Provide stub for fail_if_no_align which is expected by functional
+                            try:
+                                from torchaudio._internal.module_utils import no_op
+                                module.fail_if_no_align = no_op
+                            except Exception:
+                                module.fail_if_no_align = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("torchaudio extension not available"))
+                            # Ensure expected attributes exist
+                            if not hasattr(module, "_check_cuda_version"):
+                                module._check_cuda_version = lambda: None
+                        else:
+                            raise
+
+                spec.loader.exec_module = exec_module_patched
+            return spec
         return None
 
 

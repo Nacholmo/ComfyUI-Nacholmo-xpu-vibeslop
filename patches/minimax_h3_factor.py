@@ -43,8 +43,29 @@ def _patch_minimax_model_module(mod):
             aug = payload.get("visual_cond_noise_aug", getattr(mod, "VISUAL_COND_TIMESTEP", 0.999))
             seed = int(payload.get("seed", 0))
 
-            for z in payload.get("cond_video_latents", []):
-                if target_hw is not None and z.shape[-2:] != target_hw:
+            # Distinguish keyframe conds (which should be auto-scaled to target_hw
+            # after a latent upscaler) from ref conds (which keep their own spatial
+            # grid and must NOT be scaled). cond_video_latents is built as
+            # keyframes latents + refs latents in model_base.MiniMaxH3.extra_conds.
+            keyframes = payload.get("keyframes") or []
+            # count how many keyframe entries actually contributed a latent
+            num_kf_conds = 0
+            for kf in keyframes:
+                if isinstance(kf, dict) and kf.get("latent") is not None:
+                    num_kf_conds += 1
+            # Also build identity set for robust fallback (refs may be same object)
+            refs = payload.get("refs") or []
+            ref_ids = set(id(b.get("latent")) for b in refs if b.get("latent") is not None)
+
+            for idx, z in enumerate(payload.get("cond_video_latents", [])):
+                # First num_kf_conds entries are keyframes, rest are refs
+                is_ref = False
+                if idx >= num_kf_conds and refs:
+                    is_ref = True
+                elif id(z) in ref_ids:
+                    is_ref = True
+                # Only auto-scale non-ref (keyframe) conds
+                if not is_ref and target_hw is not None and z.shape[-2:] != target_hw:
                     B, C, T, H, W = z.shape
                     z = F.interpolate(
                         z.view(B * T, C, H, W).to(torch.float32),
