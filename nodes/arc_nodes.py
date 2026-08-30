@@ -439,27 +439,75 @@ class ArcSuperResolution:
 
             pbar = comfy.utils.ProgressBar(b)
             t_start = time.perf_counter()
-            last_log_time = t_start
 
-            while True:
-                comfy.model_management.throw_exception_if_processing_interrupted()
-                if _WORKER.conn.poll(0.05):
-                    msg = _WORKER.conn.recv()
-                    if msg.get("status") == "error":
-                        raise RuntimeError(f"Arc Super Resolution worker error: {msg.get('error')}\n{msg.get('traceback', '')}")
-                    elif msg.get("status") == "progress":
-                        i = msg["frame"]
-                        pbar.update(1)
-                        now = time.perf_counter()
-                        if (now - last_log_time >= 1.0) or (i == b - 1):
-                            elapsed = now - t_start
-                            fps = (i + 1) / elapsed if elapsed > 0 else 0.0
-                            pct = ((i + 1) / b) * 100.0
-                            remaining = (b - (i + 1)) / fps if fps > 0 else 0.0
-                            print(f"[Arc Super Resolution] Frame {i + 1}/{b} ({pct:.1f}%) | {fps:.2f} fps | ETA: {remaining:.1f}s")
-                            last_log_time = now
-                    elif msg.get("status") == "done":
-                        break
+            # Single-line terminal loading bar (in-place, no line spam).
+            # Uses tqdm when available, otherwise falls back to a minimal \r bar.
+            term_pbar = None
+            use_tqdm = False
+            last_postfix = t_start
+            try:
+                from tqdm.auto import tqdm as _tqdm  # type: ignore
+
+                # tqdm auto-detects non-tty and disables itself gracefully
+                term_pbar = _tqdm(
+                    total=b,
+                    desc="Arc Super Resolution",
+                    unit="frame",
+                    dynamic_ncols=True,
+                    leave=True,
+                    mininterval=0.2,
+                )
+                use_tqdm = True
+            except Exception:
+                term_pbar = None
+                use_tqdm = False
+
+            try:
+                while True:
+                    comfy.model_management.throw_exception_if_processing_interrupted()
+                    if _WORKER.conn.poll(0.05):
+                        msg = _WORKER.conn.recv()
+                        if msg.get("status") == "error":
+                            raise RuntimeError(f"Arc Super Resolution worker error: {msg.get('error')}\n{msg.get('traceback', '')}")
+                        elif msg.get("status") == "progress":
+                            i = msg["frame"]
+                            pbar.update(1)
+                            now = time.perf_counter()
+                            if use_tqdm and term_pbar is not None:
+                                term_pbar.update(1)
+                                if (now - last_postfix >= 0.2) or (i == b - 1):
+                                    elapsed = now - t_start
+                                    fps = (i + 1) / elapsed if elapsed > 0 else 0.0
+                                    remaining = (b - (i + 1)) / fps if fps > 0 else 0.0
+                                    term_pbar.set_postfix_str(f"{fps:.2f} fps, ETA {remaining:.1f}s")
+                                    last_postfix = now
+                            else:
+                                # Fallback: throttled in-place bar via \r (one line, overwrites itself)
+                                if (now - last_postfix >= 0.5) or (i == b - 1):
+                                    elapsed = now - t_start
+                                    fps = (i + 1) / elapsed if elapsed > 0 else 0.0
+                                    pct = ((i + 1) / b) * 100.0
+                                    remaining = (b - (i + 1)) / fps if fps > 0 else 0.0
+                                    bar_w = 30
+                                    filled = int(bar_w * (i + 1) / b)
+                                    bar = "█" * filled + "░" * (bar_w - filled)
+                                    msg_str = f"\r[Arc Super Resolution] |{bar}| {i + 1}/{b} ({pct:.1f}%) {fps:.2f} fps ETA: {remaining:.1f}s"
+                                    # pad to clear previous longer line
+                                    print(msg_str.ljust(100), end="", flush=True)
+                                    last_postfix = now
+                                    if i == b - 1:
+                                        print()
+                        elif msg.get("status") == "done":
+                            break
+            finally:
+                if term_pbar is not None:
+                    try:
+                        term_pbar.close()
+                    except Exception:
+                        pass
+                elif not use_tqdm and last_postfix != t_start:
+                    # ensure fallback \r bar terminated (already printed newline on last frame)
+                    pass
 
             if spill_path is not None:
                 storage = torch.UntypedStorage.from_file(spill_path, False, out_bytes)
