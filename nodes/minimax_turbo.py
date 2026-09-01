@@ -31,6 +31,39 @@ import folder_paths
 SHIFT_V, SHIFT_A = 12.0, 3.0
 
 
+def _get_dm(patcher):
+    """Return diffusion model regardless of wrapper type.
+
+    ComfyUI's MODEL patcher usually wraps BaseModel (MiniMaxH3) which contains
+    .diffusion_model (MiniMaxH3Model). But UNET loader or pruned converters can
+    give a patcher where .model is already the MiniMaxH3Model. Handle both.
+    """
+    m = patcher.model
+    dm = getattr(m, "diffusion_model", None)
+    if dm is not None:
+        return dm
+    if hasattr(m, "blocks") and hasattr(m, "use_adaln_curves"):
+        return m
+    return dm
+
+
+def _model_has_diffusion_prefix(patcher):
+    try:
+        return any(k.startswith("diffusion_model.") for k in patcher.model.state_dict().keys())
+    except Exception:
+        return hasattr(patcher.model, "diffusion_model")
+
+
+def _normalize_target_key(m, has_prefix):
+    has_m_prefix = m.startswith("diffusion_model.")
+    base = m[len("diffusion_model."):] if has_m_prefix else m
+    return f"diffusion_model.{base}" if has_prefix else base
+
+
+def _normalize_lora_target(m, has_prefix):
+    return _normalize_target_key(m, has_prefix) + ".weight"
+
+
 def _time_shift_sigma(sigma, fr, to):
     base = sigma / (fr + sigma * (1.0 - fr))
     return to * base / (1.0 + (to - 1.0) * base)
@@ -315,7 +348,8 @@ def _apply_bypass_lora(new_model, lora, modules, strength):
     model_lora_keys_unet does not recognise the H3 lora naming, so build the key
     map directly (module -> diffusion_model.<module>.weight). Adapters are wrapped
     in _FrugalLoRA for the in-place additive path (see its docstring)."""
-    key_map = {m: "diffusion_model.{}.weight".format(m) for m in modules}
+    has_prefix = _model_has_diffusion_prefix(new_model)
+    key_map = {m: _normalize_lora_target(m, has_prefix) for m in modules}
     loaded = comfy.lora.load_lora(lora, key_map, log_missing=False)
     manager = comfy.weight_adapter.BypassInjectionManager()
     sd_keys = set(new_model.model.state_dict().keys())
@@ -342,7 +376,8 @@ def _apply_merge_lora(new_model, lora, modules, strength):
     GPUs run, but on a quantized base the delta is partly rounded away when it is
     merged back into int8/fp8 (and on bf16 it sits near the ULP), i.e. softer than
     the bypass path — the sharpness/VRAM trade the low_vram switch exposes."""
-    key_map = {m: "diffusion_model.{}.weight".format(m) for m in modules}
+    has_prefix = _model_has_diffusion_prefix(new_model)
+    key_map = {m: _normalize_lora_target(m, has_prefix) for m in modules}
     loaded = comfy.lora.load_lora(lora, key_map, log_missing=False)
     return len(new_model.add_patches(loaded, strength))
 
@@ -365,8 +400,13 @@ def _int8_fused_fc2(dm, modules):
     for m in modules:
         if not m.endswith(".mlp.fc2"):
             continue
+        # m may be "diffusion_model.blocks.0.mlp.fc2" but dm is the raw
+        # MiniMaxH3Model (no prefix). Strip if needed.
+        attr = m
+        if attr.startswith("diffusion_model."):
+            attr = attr[len("diffusion_model."):]
         try:
-            w = comfy.utils.get_attr(dm, m + ".weight")
+            w = comfy.utils.get_attr(dm, attr + ".weight")
         except Exception:
             continue
         if (getattr(w, "_layout_cls", None) == "TensorWiseINT8Layout"
@@ -406,13 +446,24 @@ def _inject_adaln_egrid(new_model, dm, lora, adaln, strength):
 
     new_model.add_wrapper_with_key(
         comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL, "h3turbo", wrap)
-    for name in adaln:                       # name = "....adaln_proj.linear"
+    has_prefix = _model_has_diffusion_prefix(new_model)
+    for name in adaln:                       # name = "....adaln_proj.linear" (may include diffusion_model. prefix)
+        # lora dict lookup uses full name as stored (with prefix if present)
         a = lora[name + ".lora_A.weight"]
         b = lora[name + ".lora_B.weight"] * strength
-        key = "diffusion_model." + name.rsplit(".linear", 1)[0]
+        base = name.rsplit(".linear", 1)[0]
+        key = _normalize_target_key(base, has_prefix)
+        # get_model_object needs the same key the patcher understands;
+        # try normalized key, fallback to stripped/alternate.
+        try:
+            obj = new_model.get_model_object(key)
+        except Exception:
+            alt = base[len("diffusion_model."):] if base.startswith("diffusion_model.") else f"diffusion_model.{base}"
+            obj = new_model.get_model_object(alt)
+            key = alt
         new_model.add_object_patch(
             key + ".forward",
-            _make_adaln_forward(new_model.get_model_object(key), a, b, shared, tt, E))
+            _make_adaln_forward(obj, a, b, shared, tt, E))
 
 
 def _add_dbg_wrapper(new_model, dm, tag, mode):
@@ -491,9 +542,27 @@ class MiniMaxH3TurboLoRA:
     def apply_lora(self, model, lora_name, strength, low_vram=False):
         path = folder_paths.get_full_path("loras", lora_name)
         lora = comfy.utils.load_torch_file(path, safe_load=True)
-        dm = model.model.diffusion_model
+        dm = _get_dm(model)
+        if dm is None:
+            raise AttributeError(f"Could not locate diffusion_model on {type(model.model).__name__}; expected BaseModel.diffusion_model or direct MiniMaxH3Model")
+        # PDD LoRA detection (PR #15908): FinalLayer head bank uses
+        # reshape_weight / set_weight, not plain LoRA. This node is for
+        # 4-step Turbo (no head bank). PDD must be loaded via the stock
+        # Load LoRA / LoraLoader – ComfyUI now handles it natively.
+        if any("final_layer" in k and ("reshape_weight" in k or "set_weight" in k or "set_bias" in k) for k in lora):
+            raise ValueError(
+                "This file is a MiniMax-H3 **PDD LoRA** (Parallel Decoding Distillation, "
+                "8-step, from https://huggingface.co/alibaba-pai/MiniMax-H3-Acc-LoRAs / PR #15908). "
+                "It contains a FinalLayer head bank (reshape_weight/set_weight) and is **not** a Turbo LoRA. "
+                "Use the **standard `Load LoRA` / `LoraLoader` node** (or ModelSampling) instead of `MiniMaxH3TurboLoRA`. "
+                "TurboLoRA is for the 4-step Turbo distillation (no head bank). "
+                "If you need PDD via this suite, use the stock loader – PDD is Apache-2.0/comfy-compatible and needs no custom node."
+            )
+        # Diff-b and other non-lora keys (e.g. diff_b, diff) must not be
+        # treated as LoRA modules – otherwise 'diffusion_model.blocks.0.adaln_proj.linear.diff_b'
+        # becomes a fake module and triggers KeyError for diff_b.lora_A.
         pruned = getattr(dm, "use_adaln_curves", False)
-        modules = sorted({k.rsplit(".lora_", 1)[0] for k in lora})
+        modules = sorted({k.rsplit(".lora_", 1)[0] for k in lora if ".lora_" in k})
         new_model = model.clone()
         mode = "merge" if low_vram else "bypass"
 

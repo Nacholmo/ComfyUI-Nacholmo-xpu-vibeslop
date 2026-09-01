@@ -80,20 +80,28 @@ def _apply_stride_patch():
         if kind == "audio":
             return float(blk.get("ref_audio_t", 0))
         if kind in ("video", "video_audio"):
-            # If strided and we want to preserve duration, use original span
             if blk.get("preserve_duration") and blk.get("orig_latent_t") is not None:
                 orig_vt = blk["orig_latent_t"]
-                # total span of original full video
                 try:
                     return max(float(blk.get("ref_audio_t", 0)), sum(orig_video_t_spans(orig_vt)))
                 except Exception:
                     pass
-            # fallback to original logic
             return orig_ref_t_span(blk)
         return 0.0
 
-    def _patched_PackedLayout_init(self, text_len, latent_t, latent_h, latent_w, audio_t, keyframes=None, refs=None):
-        # If no strided refs with preserve, fall back to original
+    def _refs_cursor_delta_patched(refs):
+        delta = 0.0
+        for blk in refs or ():
+            delta += _patched_ref_t_span(blk)
+        return delta
+
+    def _context_k_distance(k):
+        if k >= 0:
+            return 0.0
+        m = -k
+        return sum(_minimax_model.FRAME_RESCALE * _minimax_model.FRAME_PER_TOKEN[(-i) % 5] for i in range(1, m + 1))
+
+    def _patched_PackedLayout_init(self, text_len, latent_t, latent_h, latent_w, audio_t, keyframes=None, refs=None, frame_count=None, **kwargs):
         has_strided = False
         if refs:
             for blk in refs:
@@ -101,10 +109,17 @@ def _apply_stride_patch():
                     has_strided = True
                     break
         if not has_strided:
-            return orig_PackedLayout_init(self, text_len, latent_t, latent_h, latent_w, audio_t, keyframes, refs)
+            try:
+                return orig_PackedLayout_init(self, text_len, latent_t, latent_h, latent_w, audio_t, keyframes=keyframes, refs=refs, frame_count=frame_count, **kwargs)
+            except TypeError:
+                if frame_count is not None:
+                    try:
+                        return orig_PackedLayout_init(self, text_len, latent_t, latent_h, latent_w, audio_t, keyframes=keyframes, refs=refs, **kwargs)
+                    except TypeError:
+                        return orig_PackedLayout_init(self, text_len, latent_t, latent_h, latent_w, audio_t, keyframes, refs)
+                return orig_PackedLayout_init(self, text_len, latent_t, latent_h, latent_w, audio_t, keyframes, refs)
 
-        # Custom init that spreads strided tokens over original duration
-        # Copied from comfy/ldm/minimax/model.py:321 with modifications for stride
+        # has_strided == True: custom init merging Extend context handling with stride scaling
         frame, w_grid = _minimax_model._frame_grid(latent_h, latent_w)
         frame_rows = frame.shape[0]
 
@@ -118,13 +133,76 @@ def _apply_stride_patch():
         row = text_len
 
         target_audio_w = (float(w_grid[0]), float(w_grid[-1]))
-        cursor = float(text_len)
-        for blk in refs or ():
-            cursor += _patched_ref_t_span(blk)
+        target_origin = float(text_len) + _refs_cursor_delta_patched(refs)
+        cursor_for_keyframes = target_origin
+        context_k_cursor = 0
+        audio_context_cursor = target_origin
 
         if keyframes:
-            for kf in keyframes or []:
-                cond_t = cursor + _minimax_model.FRAME_RESCALE * kf["resolved_frame_index"]
+            for kf in keyframes:
+                if kf.get("kind") == "context":
+                    n_frames = kf["num_frames"]
+                    ks = range(context_k_cursor - n_frames + 1, context_k_cursor + 1)
+                    t_grid = torch.tensor([target_origin - _context_k_distance(k) for k in ks], dtype=torch.float64)
+                    context_k_cursor -= n_frames
+                    g2 = torch.empty(n_frames, frame_rows, 3, dtype=torch.float64)
+                    g2[:, :, 0] = t_grid[:, None]
+                    g2[:, :, 1:] = frame[None]
+                    n = n_frames * frame_rows
+                    segments.append(("cond", n))
+                    pos.append(g2.reshape(-1, 3))
+                    img_pos.append(torch.arange(row, row + n))
+                    img_update.append(torch.zeros(n, dtype=torch.bool))
+                    row += n
+                    continue
+                if kf.get("kind") == "context_audio":
+                    rt = kf["num_frames"]
+                    segments.append(("ref_audio", rt * 2))
+                    pos.append(_minimax_model._audio_grid(audio_context_cursor - rt, rt, float(w_grid[0]), float(w_grid[-1])))
+                    audio_pos.append(torch.arange(row, row + rt * 2))
+                    audio_update.append(torch.zeros(rt * 2, dtype=torch.bool))
+                    audio_context_cursor -= rt
+                    row += rt * 2
+                    continue
+                if "resolved_frame_index" in kf:
+                    pixel_index = kf["resolved_frame_index"]
+                    if pixel_index == 0:
+                        cond_t = target_origin
+                    elif frame_count is not None and pixel_index == frame_count - 1:
+                        try:
+                            cond_t = target_origin + sum(_minimax_model._video_t_spans(latent_t)) - _minimax_model.FRAME_RESCALE
+                        except Exception:
+                            cond_t = cursor_for_keyframes + _minimax_model.FRAME_RESCALE * pixel_index
+                    else:
+                        # generic anchor (Extend would raise for non-first/last, but we allow)
+                        if pixel_index != 0 and not (frame_count is not None and pixel_index == frame_count - 1):
+                            # keep strict for Extend compatibility: raise if not first/last unless we are in stride mode where intermediate might be used
+                            # For now, compute generic position to avoid crash
+                            pass
+                        cond_t = cursor_for_keyframes + _minimax_model.FRAME_RESCALE * pixel_index
+                    video_latent = kf.get("latent")
+                    if video_latent is not None:
+                        # Extend's resolved_frame_index uses single frame_rows (image keyframe)
+                        n = frame_rows
+                        g_single = torch.empty(frame_rows, 3, dtype=torch.float64)
+                        g_single[:, 0] = cond_t
+                        g_single[:, 1:] = frame
+                        segments.append(("cond", n))
+                        pos.append(g_single)
+                        img_pos.append(torch.arange(row, row + n))
+                        img_update.append(torch.zeros(n, dtype=torch.bool))
+                        row += n
+                    audio_latent = kf.get("audio_latent")
+                    if audio_latent is not None:
+                        rt = audio_latent.shape[-1]
+                        segments.append(("cond_audio", rt * 2))
+                        pos.append(_minimax_model._audio_grid(cond_t, rt, *target_audio_w))
+                        audio_pos.append(torch.arange(row, row + rt * 2))
+                        audio_update.append(torch.zeros(rt * 2, dtype=torch.bool))
+                        row += rt * 2
+                    continue
+                # fallback for unknown kf shape
+                cond_t = cursor_for_keyframes + _minimax_model.FRAME_RESCALE * kf.get("resolved_frame_index", 0)
                 video_latent = kf.get("latent")
                 if video_latent is not None:
                     vt = video_latent.shape[2]
@@ -183,28 +261,17 @@ def _apply_stride_patch():
                         row += rt * 2
                     n = vt * r_frame.shape[0]
                     segments.append(("ref_img", n))
-                    # Build video grid with stride-aware t positions
                     if preserve and stride > 1 and orig_vt is not None and orig_vt != vt:
-                        # Spread vt tokens over the original total span
-                        # Original total span
                         try:
                             orig_spans = orig_video_t_spans(orig_vt)
                             orig_total = sum(orig_spans)
                             cur_spans = orig_video_t_spans(vt)
                             cur_total = sum(cur_spans)
-                            # Scale factor to make cur span match orig total
                             scale = orig_total / cur_total if cur_total != 0 else 1.0
-                            # Build scaled t grid: cumulative sum of scaled spans
-                            # Use scaled spans for positions
-                            # t_grid = cursor + cumsum(scaled_spans) with 0 start
                             scaled_spans_t = torch.tensor([s * scale for s in cur_spans], dtype=torch.float64)
                             t_grid = float(cursor) + torch.cat([torch.zeros(1, dtype=torch.float64), scaled_spans_t[:-1].cumsum(0)])
                         except Exception:
-                            # Fallback to original grid
                             t_grid = orig_video_t_grid(vt, cursor)
-                        # Alternative more accurate: subsample original grid
-                        # For better temporal distribution, we could also interpolate original grid
-                        # but scaled approach preserves uniform speed
                         g = torch.empty(vt, r_frame.shape[0], 3, dtype=torch.float64)
                         g[:, :, 0] = t_grid[:, None]
                         g[:, :, 1:] = r_frame[None]
@@ -215,7 +282,6 @@ def _apply_stride_patch():
                     img_pos.append(torch.arange(row, row + n))
                     img_update.append(torch.zeros(n, dtype=torch.bool))
                     row += n
-                    # Advance cursor by original span if preserving
                     if preserve and orig_vt is not None:
                         try:
                             cursor += max(float(rt), sum(orig_video_t_spans(orig_vt)))
@@ -224,7 +290,6 @@ def _apply_stride_patch():
                     else:
                         cursor += max(float(rt), sum(orig_video_t_spans(vt)))
 
-        # target audio then target video, always the last two segments
         segments.append(("audio", audio_t * 2))
         pos.append(_minimax_model._audio_grid(cursor, audio_t, *target_audio_w))
         audio_pos.append(torch.arange(row, row + audio_t * 2))
@@ -252,14 +317,11 @@ def _apply_stride_patch():
             off += n
         self.segments = seg_abs
 
-    # Apply patches
     _minimax_model._ref_t_span = _patched_ref_t_span
     _minimax_model.PackedLayout.__init__ = _patched_PackedLayout_init
-    # Mark as patched globally
     _minimax_model.PackedLayout._nacholmo_stride_patched = True
-    _minimax_model._ref_t_span._nacholmo_stride_patched = True  # type: ignore
-    # Also patch _video_t_spans etc. if needed elsewhere (no)
-    print("[MiniMaxH3-Stride] Patched PackedLayout to preserve reference duration for strided videos", flush=True)
+    _minimax_model._ref_t_span._nacholmo_stride_patched = True
+    print("[MiniMaxH3-Stride] Patched PackedLayout to preserve reference duration for strided videos (with Extend compat, frame_count support)", flush=True)
 
 # Apply at import time
 try:

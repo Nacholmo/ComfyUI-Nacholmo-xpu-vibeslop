@@ -26,8 +26,11 @@ try:
 except Exception:
     pass
 
-try:
-    _load_and_run("patches/minimax_upscaler_xpu.py", "apply")
-except Exception:
-    pass
+# Note: minimax_upscaler_xpu is intentionally NOT loaded here.
+# It imports torch at the top level, which would trigger
+# main.py:244 "Torch already imported" warning.
+# It is applied lazily via patches/__init__.py:apply_all_patches()
+# during custom_nodes loading (after the warning check) via its
+# _MinimaxUpscalerMetaFinder + sys.modules scan, so early load
+# is unnecessary.
 
