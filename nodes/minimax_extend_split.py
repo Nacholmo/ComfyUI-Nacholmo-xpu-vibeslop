@@ -313,8 +313,8 @@ class MiniMaxH3LatentStitch:
                 "color_match": (
                     "BOOLEAN",
                     {
-                        "default": True,
-                        "tooltip": "Aligns Chunk 2's channel-wise DC luminance/color offset to Chunk 1 to eliminate color shifts.",
+                        "default": False,
+                        "tooltip": "Optional channel-wise DC offset alignment. Default False (seamless_handoff already discards boundary tokens without darkening Chunk 2).",
                     },
                 ),
             },
@@ -323,9 +323,9 @@ class MiniMaxH3LatentStitch:
     RETURN_TYPES = ("LATENT",)
     FUNCTION = "stitch"
     CATEGORY = "Intel-Arc/MiniMax"
-    DESCRIPTION = "Stitches two refined 2MP chunks with color matching and boundary-artifact elimination for seamless continuity."
+    DESCRIPTION = "Stitches two refined 2MP chunks with boundary-artifact elimination for seamless continuity."
 
-    def stitch(self, chunk_1, chunk_2, overlap_latent_frames=2, blend_mode="seamless_handoff", color_match=True):
+    def stitch(self, chunk_1, chunk_2, overlap_latent_frames=2, blend_mode="seamless_handoff", color_match=False):
         v1, a1, is_av1 = _extract_video_audio(chunk_1)
         v2, a2, is_av2 = _extract_video_audio(chunk_2)
         overlap = int(overlap_latent_frames)
