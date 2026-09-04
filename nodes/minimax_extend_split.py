@@ -298,14 +298,23 @@ class MiniMaxH3LatentStitch:
                         "min": 0,
                         "max": 8,
                         "step": 1,
-                        "tooltip": "Number of overlapping latent frames at the seam to blend.",
+                        "tooltip": "Number of overlapping latent frames at the seam.",
                     },
                 ),
                 "blend_mode": (
-                    ["cosine_fade", "linear_fade", "cut"],
+                    ["seamless_handoff", "variance_preserving_fade", "cosine_fade", "linear_fade"],
                     {
-                        "default": "cosine_fade",
-                        "tooltip": "Method to merge overlapping boundary frames.",
+                        "default": "seamless_handoff",
+                        "tooltip": "seamless_handoff: bypasses Chunk 2's lighter boundary tokens entirely by preserving Chunk 1 fully and starting Chunk 2 at the handoff. variance_preserving_fade: cross-fades while maintaining contrast to prevent milky frames.",
+                    },
+                ),
+            },
+            "optional": {
+                "color_match": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "tooltip": "Aligns Chunk 2's channel-wise DC luminance/color offset to Chunk 1 to eliminate color shifts.",
                     },
                 ),
             },
@@ -314,58 +323,91 @@ class MiniMaxH3LatentStitch:
     RETURN_TYPES = ("LATENT",)
     FUNCTION = "stitch"
     CATEGORY = "Intel-Arc/MiniMax"
-    DESCRIPTION = "Stitches two refined 2MP chunks with smooth cosine cross-fading of latent frames and audio."
+    DESCRIPTION = "Stitches two refined 2MP chunks with color matching and boundary-artifact elimination for seamless continuity."
 
-    def stitch(self, chunk_1, chunk_2, overlap_latent_frames=2, blend_mode="cosine_fade"):
+    def stitch(self, chunk_1, chunk_2, overlap_latent_frames=2, blend_mode="seamless_handoff", color_match=True):
         v1, a1, is_av1 = _extract_video_audio(chunk_1)
         v2, a2, is_av2 = _extract_video_audio(chunk_2)
         overlap = int(overlap_latent_frames)
 
-        if overlap <= 0 or blend_mode == "cut":
-            v_stitched = torch.cat([v1[:, :, :-overlap] if overlap > 0 else v1, v2], dim=2)
+        # 1. Color Matching: Channel-wise DC median offset alignment
+        if color_match and overlap > 0 and v1.shape[2] >= overlap and v2.shape[2] >= overlap:
+            c = v2.shape[1]
+            ref_ov = v1[:, :, -overlap:].float()
+            new_ov = v2[:, :, :overlap].float()
+            p_ref = ref_ov.permute(0, 2, 3, 4, 1).reshape(-1, c)
+            p_new = new_ov.permute(0, 2, 3, 4, 1).reshape(-1, c)
+            dc = (p_new - p_ref).median(dim=0).values.clamp(-0.5, 0.5)
+            v2 = v2 - dc.view(1, c, 1, 1, 1).to(v2.device, v2.dtype)
+            log.info(f"[MiniMaxH3LatentStitch] Applied DC color matching (|dc| max={dc.abs().max().item():.4f})")
+
+        # Audio alignment parameters
+        if is_av1 and is_av2 and a1 is not None and a2 is not None:
+            a1_t = a1.shape[-1]
+            a2_t = a2.shape[-1]
+            k_st = (v1.shape[2] + v2.shape[2] - overlap - 2) // 5 if (v1.shape[2] + v2.shape[2] - overlap - 2) % 5 == 0 else (v1.shape[2] + v2.shape[2] - overlap - 2) / 5
+            expected_a_t = int(round((5 + 17 * k_st) * (5.0 / 3.0)))
+            a_ov = a1_t + a2_t - expected_a_t
+            if a_ov <= 0 or a_ov > min(a1_t, a2_t):
+                a_ov = round(overlap / v1.shape[2] * a1_t)
+        else:
+            a_ov = 0
+
+        # 2. Latent Stitching
+        if overlap <= 0 or blend_mode == "seamless_handoff":
+            # Seamless handoff: Keep Chunk 1 pristine up to its end, discard Chunk 2's initial
+            # boundary frames (which suffer from the token-0 lightness artifact), and append Chunk 2
+            # starting at frame 'overlap'. Motion flows seamlessly because Chunk 2 was conditioned on Chunk 1.
+            v_stitched = torch.cat([v1, v2[:, :, overlap:]], dim=2)
             if is_av1 and is_av2 and a1 is not None and a2 is not None:
-                a_ov = round(overlap / v1.shape[2] * a1.shape[-1]) if overlap > 0 else 0
-                a_stitched = torch.cat([a1[..., :-a_ov] if a_ov > 0 else a1, a2], dim=-1)
+                a_stitched = torch.cat([a1, a2[..., a_ov:]], dim=-1)
             else:
                 a_stitched = None
-        else:
+
+        elif blend_mode == "variance_preserving_fade":
+            w = torch.linspace(0.0, 1.0, overlap + 2, device=v1.device, dtype=v1.dtype)[1:-1]
+            w = 0.5 * (1.0 - torch.cos(w * math.pi)).view(1, 1, overlap, 1, 1)
+            ov1 = v1[:, :, -overlap:]
+            ov2 = v2[:, :, :overlap]
+            raw_blend = (1.0 - w) * ov1 + w * ov2
+            target_std = (1.0 - w) * ov1.std(dim=(-2, -1), keepdim=True) + w * ov2.std(dim=(-2, -1), keepdim=True)
+            target_mean = (1.0 - w) * ov1.mean(dim=(-2, -1), keepdim=True) + w * ov2.mean(dim=(-2, -1), keepdim=True)
+            v_overlap = (raw_blend - raw_blend.mean(dim=(-2, -1), keepdim=True)) / (raw_blend.std(dim=(-2, -1), keepdim=True) + 1e-6) * target_std + target_mean
+            v_stitched = torch.cat([v1[:, :, :-overlap], v_overlap, v2[:, :, overlap:]], dim=2)
+
+            if is_av1 and is_av2 and a1 is not None and a2 is not None and a_ov > 0:
+                w_a = torch.linspace(0.0, 1.0, a_ov + 2, device=a1.device, dtype=a1.dtype)[1:-1]
+                w_a = 0.5 * (1.0 - torch.cos(w_a * math.pi)).view(1, 1, 1, a_ov)
+                a_overlap = (1.0 - w_a) * a1[..., -a_ov:] + w_a * a2[..., :a_ov]
+                a_stitched = torch.cat([a1[..., :-a_ov], a_overlap, a2[..., a_ov:]], dim=-1)
+            else:
+                a_stitched = torch.cat([a1, a2], dim=-1) if (is_av1 and is_av2 and a1 is not None and a2 is not None) else None
+
+        else:  # cosine_fade or linear_fade
             if blend_mode == "cosine_fade":
                 w = torch.linspace(0.0, 1.0, overlap + 2, device=v1.device, dtype=v1.dtype)[1:-1]
                 w = 0.5 * (1.0 - torch.cos(w * math.pi))
-            else:  # linear_fade
+            else:
                 w = torch.linspace(0.0, 1.0, overlap + 2, device=v1.device, dtype=v1.dtype)[1:-1]
             w = w.view(1, 1, overlap, 1, 1)
 
-            # Smoothly blend the overlap frames
             v_overlap = (1.0 - w) * v1[:, :, -overlap:] + w * v2[:, :, :overlap]
             v_stitched = torch.cat([v1[:, :, :-overlap], v_overlap, v2[:, :, overlap:]], dim=2)
 
-            # Audio cross-fade matching temporal duration
-            if is_av1 and is_av2 and a1 is not None and a2 is not None:
-                a1_t = a1.shape[-1]
-                a2_t = a2.shape[-1]
-                k_st = (v_stitched.shape[2] - 2) // 5 if (v_stitched.shape[2] - 2) % 5 == 0 else (v_stitched.shape[2] - 2) / 5
-                expected_a_t = int(round((5 + 17 * k_st) * (5.0 / 3.0)))
-                a_ov = a1_t + a2_t - expected_a_t
-                if a_ov <= 0 or a_ov > min(a1_t, a2_t):
-                    a_ov = round(overlap / v1.shape[2] * a1_t)
-
-                if a_ov > 0:
-                    if blend_mode == "cosine_fade":
-                        w_a = torch.linspace(0.0, 1.0, a_ov + 2, device=a1.device, dtype=a1.dtype)[1:-1]
-                        w_a = 0.5 * (1.0 - torch.cos(w_a * math.pi)).view(1, 1, 1, a_ov)
-                    else:
-                        w_a = torch.linspace(0.0, 1.0, a_ov + 2, device=a1.device, dtype=a1.dtype)[1:-1].view(1, 1, 1, a_ov)
-                    a_overlap = (1.0 - w_a) * a1[..., -a_ov:] + w_a * a2[..., :a_ov]
-                    a_stitched = torch.cat([a1[..., :-a_ov], a_overlap, a2[..., a_ov:]], dim=-1)
+            if is_av1 and is_av2 and a1 is not None and a2 is not None and a_ov > 0:
+                if blend_mode == "cosine_fade":
+                    w_a = torch.linspace(0.0, 1.0, a_ov + 2, device=a1.device, dtype=a1.dtype)[1:-1]
+                    w_a = 0.5 * (1.0 - torch.cos(w_a * math.pi)).view(1, 1, 1, a_ov)
                 else:
-                    a_stitched = torch.cat([a1, a2], dim=-1)
+                    w_a = torch.linspace(0.0, 1.0, a_ov + 2, device=a1.device, dtype=a1.dtype)[1:-1].view(1, 1, 1, a_ov)
+                a_overlap = (1.0 - w_a) * a1[..., -a_ov:] + w_a * a2[..., :a_ov]
+                a_stitched = torch.cat([a1[..., :-a_ov], a_overlap, a2[..., a_ov:]], dim=-1)
             else:
-                a_stitched = None
+                a_stitched = torch.cat([a1, a2], dim=-1) if (is_av1 and is_av2 and a1 is not None and a2 is not None) else None
 
         log.info(
             f"[MiniMaxH3LatentStitch] Stitched Chunk 1 (T={v1.shape[2]}) and Chunk 2 (T={v2.shape[2]}) "
-            f"-> Total T={v_stitched.shape[2]} with {overlap}-frame {blend_mode}"
+            f"-> Total T={v_stitched.shape[2]} with mode={blend_mode} (color_match={color_match})"
         )
 
         return (_wrap_latent(v_stitched, a_stitched, is_av1 and is_av2),)
