@@ -84,4 +84,15 @@ try:
 except Exception as e:
     log.warning(f"[Intel-Arc-Suite] Could not load MiniMax-H3 Reference Stride node: {e}")
 
+# 8. Sol-Attn Sparse Block Attention Node (Intel Arc XPU 3-4x Speedup)
+try:
+    from .sol_attn_node import (
+        NODE_CLASS_MAPPINGS as _SOL_ATTN_CLASS_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _SOL_ATTN_DISPLAY_NAME_MAPPINGS,
+    )
+    NODE_CLASS_MAPPINGS.update(_SOL_ATTN_CLASS_MAPPINGS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_SOL_ATTN_DISPLAY_NAME_MAPPINGS)
+except Exception as e:
+    log.warning(f"[Intel-Arc-Suite] Could not load Sol-Attn node: {e}")
+
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

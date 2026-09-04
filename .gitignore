@@ -38,3 +38,8 @@ ENV/
 *.bin
 output/
 testimage.jpg
+
+# Local tools & documentation
+.opencode/
+papers/
+*.pdf

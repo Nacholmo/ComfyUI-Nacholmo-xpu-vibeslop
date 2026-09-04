@@ -333,9 +333,32 @@ class _FrugalLoRA(comfy.weight_adapter.LoRAAdapter):
         up, down, alpha = self.weights[0], self.weights[1], self.weights[2]
         rank = down.shape[0]
         scale = (alpha / rank if alpha is not None else 1.0) * getattr(self, "multiplier", 1.0)
-        down = down.to(dtype=x.dtype)
-        up = up.to(dtype=x.dtype)
-        return base_out.add_(F.linear(F.linear(x, down), up), alpha=scale)
+        down = down.to(device=x.device, dtype=x.dtype)
+        up = up.to(device=x.device, dtype=x.dtype)
+
+        # On wide layers (e.g. qkv_proj with out=21504, fc1 with out=28672 over ~43k tokens),
+        # computing unchunked F.linear(..., up) allocates 1.7-2.5 GB of temporary buffer,
+        # which spikes peak VRAM and causes OOM on 12GB GPUs.
+        # Chunking tokens bounds temporary allocations to <= 32 MB with bit-exact math.
+        orig_shape = base_out.shape
+        out_flat = base_out.view(-1, orig_shape[-1])
+        x_flat = x.view(-1, x.shape[-1])
+        total_tokens = x_flat.shape[0]
+        out_dim = out_flat.shape[-1]
+
+        max_chunk_bytes = 32 * 1024 * 1024
+        elem_size = 2 if x.dtype in (torch.bfloat16, torch.float16) else 4
+        chunk_size = max(256, max_chunk_bytes // (out_dim * elem_size))
+
+        if total_tokens <= chunk_size:
+            out_flat.add_(F.linear(F.linear(x_flat, down), up), alpha=scale)
+        else:
+            for start in range(0, total_tokens, chunk_size):
+                end = min(start + chunk_size, total_tokens)
+                delta = F.linear(F.linear(x_flat[start:end], down), up)
+                out_flat[start:end].add_(delta, alpha=scale)
+
+        return base_out
 
 
 def _apply_bypass_lora(new_model, lora, modules, strength):
@@ -612,11 +635,138 @@ class MiniMaxH3TurboLoRA:
         return (new_model,)
 
 
+class MiniMaxH3LoRALoader:
+    """Frugal LoRA Loader for MiniMax-H3 (and general DiT models).
+    Applies any LoRA (Turbo 4-step, PDD 8-step, style/motion/ref adapters)
+    via low-rank activation bypass hooks without dequantizing the INT8 base model.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "lora_name": (folder_paths.get_filename_list("loras"),),
+                "strength_model": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": -10.0,
+                        "max": 10.0,
+                        "step": 0.01,
+                        "tooltip": "LoRA multiplier strength. Drop-in compatible with LoraLoaderModelOnly.",
+                    },
+                ),
+            },
+            "optional": {
+                "strength": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": -10.0,
+                        "max": 10.0,
+                        "step": 0.01,
+                        "tooltip": "Optional alias for strength_model.",
+                    },
+                ),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    FUNCTION = "load_lora"
+    CATEGORY = "MiniMaxH3"
+    DESCRIPTION = (
+        "Loads MiniMax-H3 LoRAs (PDD 8-step, Turbo, Ref2VA, Style) in frugal bypass mode, "
+        "preserving INT8 quantization and maximum performance on Intel Arc XPU."
+    )
+
+    def load_lora(self, model, lora_name, strength_model=1.0, strength=None):
+        eff_strength = strength_model if strength is None else strength
+        if eff_strength == 0:
+            return (model,)
+
+        import uuid
+        path = folder_paths.get_full_path("loras", lora_name)
+        lora = comfy.utils.load_torch_file(path, safe_load=True)
+        new_model = model.clone()
+
+        key_map = comfy.lora.model_lora_keys_unet(new_model.model, {})
+        loaded = comfy.lora.load_lora(lora, key_map, log_missing=False)
+
+        # Separate final_layer / reshaped head bank keys from backbone keys.
+        # final_layer (video_out, audio_out) consists of unquantized FP32 output heads
+        # that use reshape_weight for multi-head distillation (e.g. PDD 8-step).
+        # Patching final_layer directly supports PDD head banks without dequantizing
+        # any of the 50 INT8 DiT backbone blocks.
+        backbone_loaded = {}
+        patch_loaded = {}
+        for k, v in loaded.items():
+            has_reshape = (
+                isinstance(v, comfy.weight_adapter.LoRAAdapter)
+                and len(v.weights) > 5
+                and v.weights[5] is not None
+            )
+            if "final_layer" in k or has_reshape:
+                patch_loaded[k] = v
+            else:
+                backbone_loaded[k] = v
+
+        if patch_loaded:
+            new_model.add_patches(patch_loaded, eff_strength)
+
+        manager = comfy.weight_adapter.BypassInjectionManager()
+        n = 0
+        for key, adapter in backbone_loaded.items():
+            if isinstance(adapter, comfy.weight_adapter.LoRAAdapter):
+                if key.endswith(".bias"):
+                    mod_key = key[:-5]
+                    mod = manager._get_module_by_key(new_model.model, mod_key)
+                    if mod is not None and hasattr(mod, "bias") and mod.bias is not None:
+                        try:
+                            up, down = adapter.weights[0], adapter.weights[1]
+                            b_delta = (up @ down).reshape(mod.bias.shape).to(mod.bias.device, mod.bias.dtype)
+                            mod.bias.data.add_(b_delta, alpha=eff_strength)
+                        except Exception:
+                            pass
+                    continue
+                frugal = _FrugalLoRA(adapter.loaded_keys, adapter.weights)
+                manager.add_adapter(key, frugal, strength=eff_strength)
+                n += 1
+            elif isinstance(adapter, tuple) and key.endswith(".bias"):
+                mod_key = key[:-5]
+                mod = manager._get_module_by_key(new_model.model, mod_key)
+                if mod is not None and hasattr(mod, "bias") and mod.bias is not None:
+                    try:
+                        diff_b = adapter[0]
+                        if isinstance(diff_b, torch.Tensor):
+                            mod.bias.data.add_(
+                                diff_b.reshape(mod.bias.shape).to(mod.bias.device, mod.bias.dtype),
+                                alpha=eff_strength,
+                            )
+                    except Exception:
+                        pass
+
+        injections = manager.create_injections(new_model.model)
+        if manager.get_hook_count() > 0:
+            clean_name = os.path.splitext(os.path.basename(lora_name))[0]
+            inj_key = f"frugal_lora_{clean_name}_{uuid.uuid4().hex[:6]}"
+            new_model.set_injections(inj_key, injections)
+            print(
+                f"[MiniMaxH3LoRALoader] Attached {len(manager.hooks)} bypass hooks ({len(patch_loaded)} head patches) "
+                f"for {lora_name} (strength={eff_strength})",
+                flush=True,
+            )
+
+        return (new_model,)
+
+
 NODE_CLASS_MAPPINGS = {
     "MiniMaxH3TurboLoRA": MiniMaxH3TurboLoRA,
+    "MiniMaxH3LoRALoader": MiniMaxH3LoRALoader,
     "MiniMaxH3TurboSampler": MiniMaxH3TurboSampler,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3TurboLoRA": "MiniMax-H3 Turbo LoRA",
+    "MiniMaxH3LoRALoader": "MiniMax-H3 Frugal LoRA Loader (Bypass)",
     "MiniMaxH3TurboSampler": "MiniMax-H3 Turbo Sampler (4-step)",
 }
