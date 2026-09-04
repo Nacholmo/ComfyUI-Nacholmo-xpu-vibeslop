@@ -95,4 +95,15 @@ try:
 except Exception as e:
     log.warning(f"[Intel-Arc-Suite] Could not load Sol-Attn node: {e}")
 
+# 9. MiniMax-H3 Latent Split & Extend Upscaling Suite
+try:
+    from .minimax_extend_split import (
+        NODE_CLASS_MAPPINGS as _EXTEND_SPLIT_CLASS_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _EXTEND_SPLIT_DISPLAY_NAME_MAPPINGS,
+    )
+    NODE_CLASS_MAPPINGS.update(_EXTEND_SPLIT_CLASS_MAPPINGS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_EXTEND_SPLIT_DISPLAY_NAME_MAPPINGS)
+except Exception as e:
+    log.warning(f"[Intel-Arc-Suite] Could not load MiniMax-H3 Extend Split nodes: {e}")
+
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
