@@ -8,6 +8,7 @@ echo "======================================================="
 # Parse arguments
 WITH_AIMDO=0
 WITH_VHS=0
+WITH_MINIMAX_EXTEND=0
 for arg in "$@"; do
     case $arg in
         --with-aimdo)
@@ -18,9 +19,14 @@ for arg in "$@"; do
             WITH_VHS=1
             shift
             ;;
+        --with-minimax-extend)
+            WITH_MINIMAX_EXTEND=1
+            shift
+            ;;
         --all)
             WITH_AIMDO=1
             WITH_VHS=1
+            WITH_MINIMAX_EXTEND=1
             shift
             ;;
     esac
@@ -92,6 +98,11 @@ if [ -n "$COMFY_ROOT" ]; then
         if [ -f "$COMFY_ROOT/custom_nodes/comfyui-videohelpersuite/requirements.txt" ]; then
             pip install -r "$COMFY_ROOT/custom_nodes/comfyui-videohelpersuite/requirements.txt"
         fi
+    fi
+
+    if [ "$WITH_MINIMAX_EXTEND" -eq 1 ] && [ ! -d "$COMFY_ROOT/custom_nodes/ComfyUI-MiniMax-H3-Extend" ]; then
+        echo "[+] Cloning ComfyUI-MiniMax-H3-Extend companion repository..."
+        git clone https://github.com/kat3ri/ComfyUI-MiniMax-H3-Extend "$COMFY_ROOT/custom_nodes/ComfyUI-MiniMax-H3-Extend"
     fi
 fi
 

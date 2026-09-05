@@ -121,7 +121,7 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
    # Standard setup:
    ./custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/scripts/setup.sh
 
-   # Or setup with optional companions (AIMDO DynamicVRAM + VideoHelperSuite):
+   # Or setup with optional companions (AIMDO DynamicVRAM + VideoHelperSuite + MiniMax-H3-Extend):
    ./custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/scripts/setup.sh --all
    ```
 
@@ -147,6 +147,12 @@ While this suite is fully standalone, the following companion custom nodes are r
 2. **[ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite)** (by Kosinkadink):
    - Required by `VideoCombineSync` for full video loading and frame sequence combining.
    - Install with: `git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite custom_nodes/comfyui-videohelpersuite`
+
+3. **[ComfyUI-MiniMax-H3-Extend](https://github.com/kat3ri/ComfyUI-MiniMax-H3-Extend)** (by kat3ri, MIT):
+   - Backports MiniMax-H3 video continuation / extension (`MiniMaxH3VideoExtendPatched`, `MiniMaxH3EncodeAVPatched`) onto stock ComfyUI via in-memory monkey-patching (no core files edited).
+   - Required by the suite's `MiniMaxH3LatentSplit` / `MiniMaxH3AttachContext` / `MiniMaxH3LatentStitch` 2MP tiling workflow: this suite produces `minimax_keyframes` (`context` / `context_audio`) conditioning, which the Extend node consumes as `context_latent` for seamless chunk-to-chunk continuation.
+   - Install with: `git clone https://github.com/kat3ri/ComfyUI-MiniMax-H3-Extend custom_nodes/ComfyUI-MiniMax-H3-Extend`
+   - Or via setup script: `./custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/scripts/setup.sh --with-minimax-extend` (included in `--all`).
 
 ---
 
@@ -232,3 +238,4 @@ python custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/tools/convert_upscale_models.p
 - **DarkComfyX Theme**: Color palette and userstyle design inspired by & ported from [Dark4chanX](https://uso.kkx.one/style/229613) by myi pfdll / eXoNecro, dedicated under the **Creative Commons Zero v1.0 Universal (CC0-1.0)** Public Domain Dedication.
 - **WINT8 Suite**: Derived from [JWLHS/ComfyUI-WINT8-XPU](https://github.com/JWLHS/ComfyUI-WINT8-XPU) under the **MIT License** (Copyright (c) 2026 JWLHS), ported to Linux and tuned for Intel Arc B580.
 - **Video Combine Sync**: Extends [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) with duration-matching atempo audio filter chaining.
+- **MiniMax-H3 Extend Split & Stitching Suite**: Interoperates with [ComfyUI-MiniMax-H3-Extend](https://github.com/kat3ri/ComfyUI-MiniMax-H3-Extend) by kat3ri (MIT, kept as an external companion — no code copied) for `context_latent` video continuation.
