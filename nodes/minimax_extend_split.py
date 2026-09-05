@@ -56,6 +56,29 @@ def _snap_to_h3_cycle(t):
     return max(2, t)
 
 
+def _snap_overlap(overlap):
+    """Snap overlap to 2 mod 5 (2, 7, 12, ...) so both split chunks keep valid H3 cycle length.
+
+    Split cut s is cycle-aligned (s = 2 + 5*k1) and chunk 2 length is
+    T2 = T_total - s + overlap, so (T2 - 2) % 5 == (overlap - 2) % 5.
+    Only overlap % 5 == 2 keeps both chunks valid.
+    """
+    overlap = max(1, int(overlap))
+    snapped = 2 + 5 * round((overlap - 2) / 5)
+    return max(1, snapped)
+
+
+def _audio_overlap_for_video_overlap(overlap):
+    """Exact audio-latent overlap for a cycle-aligned trailing window of `overlap` video latents.
+
+    Trailing rem frames of a 5-group map to 4px each, full groups to 17px,
+    audio latent runs at 5/3 per pixel frame (mirrors the split slicing).
+    """
+    full, rem = divmod(int(overlap), 5)
+    px = full * 17 + 4 * rem
+    return int(round(px * (5.0 / 3.0)))
+
+
 def _context_span(n_frames):
     """Calculate cursor-axis duration spanned by n_frames trailing latent frames ending at target origin."""
     try:
@@ -90,7 +113,7 @@ class MiniMaxH3LatentSplit:
                         "min": 1,
                         "max": 8,
                         "step": 1,
-                        "tooltip": "Number of overlapping latent frames at the boundary (default 2 matches MiniMax-H3-Extend context).",
+                        "tooltip": "Overlapping latent frames at the boundary (snapped to 2 mod 5 for H3 cycle: 2 or 7; use 7 for a wider seamless window).",
                     },
                 ),
             },
@@ -114,7 +137,9 @@ class MiniMaxH3LatentSplit:
     def split(self, latent, split_frame=0, overlap_latent_frames=2):
         video, audio, is_av = _extract_video_audio(latent)
         T_total = video.shape[2]
-        overlap = int(overlap_latent_frames)
+        overlap = _snap_overlap(overlap_latent_frames)
+        if overlap != int(overlap_latent_frames):
+            log.info(f"[MiniMaxH3LatentSplit] Snapped overlap {overlap_latent_frames} -> {overlap} for H3 cycle alignment")
 
         if T_total < 4:
             raise ValueError(f"Latent is too short to split (T={T_total})")
@@ -304,8 +329,8 @@ class MiniMaxH3LatentStitch:
                 "blend_mode": (
                     ["seamless_handoff", "variance_preserving_fade", "cosine_fade", "linear_fade"],
                     {
-                        "default": "seamless_handoff",
-                        "tooltip": "seamless_handoff: bypasses Chunk 2's lighter boundary tokens entirely by preserving Chunk 1 fully and starting Chunk 2 at the handoff. variance_preserving_fade: cross-fades while maintaining contrast to prevent milky frames.",
+                        "default": "variance_preserving_fade",
+                        "tooltip": "variance_preserving_fade: cross-fades while maintaining contrast to prevent milky frames (recommended, hides VAE-decode pop). seamless_handoff: hard cut preserving Chunk 1, discards Chunk 2 boundary tokens.",
                     },
                 ),
             },
@@ -313,8 +338,8 @@ class MiniMaxH3LatentStitch:
                 "color_match": (
                     "BOOLEAN",
                     {
-                        "default": False,
-                        "tooltip": "Optional channel-wise DC offset alignment. Default False (seamless_handoff already discards boundary tokens without darkening Chunk 2).",
+                        "default": True,
+                        "tooltip": "Channel-wise DC offset alignment between chunks. Recommended True: independent per-chunk upscales drift in tone.",
                     },
                 ),
             },
@@ -328,7 +353,9 @@ class MiniMaxH3LatentStitch:
     def stitch(self, chunk_1, chunk_2, overlap_latent_frames=2, blend_mode="seamless_handoff", color_match=False):
         v1, a1, is_av1 = _extract_video_audio(chunk_1)
         v2, a2, is_av2 = _extract_video_audio(chunk_2)
-        overlap = int(overlap_latent_frames)
+        overlap = _snap_overlap(overlap_latent_frames)
+        if overlap != int(overlap_latent_frames):
+            log.info(f"[MiniMaxH3LatentStitch] Snapped overlap {overlap_latent_frames} -> {overlap} for H3 cycle alignment")
 
         # 1. Color Matching: Channel-wise DC median offset alignment
         if color_match and overlap > 0 and v1.shape[2] >= overlap and v2.shape[2] >= overlap:
@@ -349,7 +376,7 @@ class MiniMaxH3LatentStitch:
             expected_a_t = int(round((5 + 17 * k_st) * (5.0 / 3.0)))
             a_ov = a1_t + a2_t - expected_a_t
             if a_ov <= 0 or a_ov > min(a1_t, a2_t):
-                a_ov = round(overlap / v1.shape[2] * a1_t)
+                a_ov = min(_audio_overlap_for_video_overlap(overlap), min(a1_t, a2_t))
         else:
             a_ov = 0
 
