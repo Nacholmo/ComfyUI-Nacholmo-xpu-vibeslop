@@ -196,7 +196,13 @@ class VideoConcatExtend:
             log.info("[VideoConcatExtend] Applied color transfer to continuation")
 
         out_images = torch.cat([before_images, after_t], dim=0)
-        nb = int(video_blend_frames)
+        n_before = before_images.shape[0]
+        log.info(
+            f"[VideoConcatExtend] before={n_before} frames, after(trimmed)={after_t.shape[0]} frames"
+        )
+        # Clamp the dissolve to what both sides can actually provide; a
+        # 1-frame before-side (or tiny continuation) dissolves nothing.
+        nb = max(0, min(int(video_blend_frames), n_before, after_t.shape[0]))
         if nb > 1 and out_images.shape[0] > nb:
             n_before = before_images.shape[0]
             # linear dissolve across nb joint frames (before-tail -> after-head)
