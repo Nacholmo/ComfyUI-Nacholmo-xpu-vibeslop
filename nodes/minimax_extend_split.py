@@ -375,6 +375,16 @@ class MiniMaxH3LatentStitch:
     def stitch(self, chunk_1, chunk_2, overlap_latent_frames=2, blend_mode="seamless_handoff", color_match=False):
         v1, a1, is_av1 = _extract_video_audio(chunk_1)
         v2, a2, is_av2 = _extract_video_audio(chunk_2)
+        if is_av1 != is_av2:
+            missing = "chunk_1" if not is_av1 else "chunk_2"
+            raise ValueError(
+                f"MiniMaxH3LatentStitch: AV mismatch — {missing} has no audio stream "
+                "(video-only latent) while the other chunk has audio. Refusing to silently "
+                "drop the audio (the result would later crash VAEDecodeAudio with "
+                "'tensor a (24) vs tensor b (32)'). Fix: feed real AUDIO into "
+                "MiniMaxH3EncodeAVPatched so the context latent carries audio, or bypass "
+                "the Stitch node and decode the sampler output directly."
+            )
         overlap = _snap_overlap(overlap_latent_frames)
         if overlap != int(overlap_latent_frames):
             log.info(f"[MiniMaxH3LatentStitch] Snapped overlap {overlap_latent_frames} -> {overlap} for H3 cycle alignment")
