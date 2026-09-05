@@ -106,4 +106,15 @@ try:
 except Exception as e:
     log.warning(f"[Intel-Arc-Suite] Could not load MiniMax-H3 Extend Split nodes: {e}")
 
+# 10. Video Concat Extend (temporal A/V join + color match)
+try:
+    from .video_concat_extend import (
+        NODE_CLASS_MAPPINGS as _CONCAT_EXTEND_CLASS_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _CONCAT_EXTEND_DISPLAY_NAME_MAPPINGS,
+    )
+    NODE_CLASS_MAPPINGS.update(_CONCAT_EXTEND_CLASS_MAPPINGS)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_CONCAT_EXTEND_DISPLAY_NAME_MAPPINGS)
+except Exception as e:
+    log.warning(f"[Intel-Arc-Suite] Could not load VideoConcatExtend node: {e}")
+
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
