@@ -64,8 +64,14 @@ def convert(path, force: bool = False):
     stem = os.path.splitext(name)[0]
     out_path = os.path.join(os.path.dirname(path), stem + ".onnx")
     if os.path.exists(out_path) and not force:
-        print(f"skip   {name}: {stem}.onnx already exists")
-        return True
+        try:
+            if os.path.getmtime(out_path) >= os.path.getmtime(path):
+                print(f"skip   {name}: {stem}.onnx already exists and is newer")
+                return True
+            print(f"redo   {name}: source newer than existing {stem}.onnx, reconverting")
+        except OSError:
+            print(f"skip   {name}: {stem}.onnx already exists")
+            return True
     try:
         descriptor = ModelLoader().load_from_file(path)
     except Exception as error:
@@ -96,9 +102,21 @@ def convert(path, force: bool = False):
     result = np.asarray(compiled([dummy.numpy()])[compiled.output(0)])
     diff = float(np.abs(result - reference).max())
     scale = result.shape[-1] // w
-    if diff > 2e-4 or scale < 1 or list(result.shape[-2:]) != [h * scale, w * scale]:
-        os.remove(out_path)
-        print(f"fail   {name}: verification failed (max diff {diff:g}, output {result.shape})")
+    result_shape = tuple(result.shape)
+    # Release large temporaries before the next model (RAM spike on big nets).
+    try:
+        del net, reference, compiled, result
+        import gc as _gc
+        _gc.collect()
+    except Exception:
+        pass
+    if diff > 2e-4 or scale < 1 or list(result_shape[-2:]) != [h * scale, w * scale]:
+        try:
+            if os.path.exists(out_path):
+                os.remove(out_path)
+        except OSError:
+            pass
+        print(f"fail   {name}: verification failed (max diff {diff:g}, output {result_shape})")
         return False
 
     arch_info = f"[{arch_name}]" if arch_name else ""
