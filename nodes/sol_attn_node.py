@@ -4,17 +4,23 @@ import logging
 import math
 import re
 import sys
+import weakref
 
 import torch
 
 log = logging.getLogger("ComfyUI-Nacholmo-xpu-vibeslop")
 
-_BLOCK_INDEX_HOOKED = set()
+_BLOCK_INDEX_HOOKED = weakref.WeakSet()
+_INSTALLED = weakref.WeakSet()
+_PATCHED_LAYOUTS = weakref.WeakSet()
+# position_ids tensor -> (layout, bounds, span); WeakKeyDictionary so entries
+# vanish with the tensor instead of leaking via id() reuse-after-GC.
+_SPANS = weakref.WeakKeyDictionary()
+# Fallback for tensors that cannot be weak-referenced (rare): id -> entry.
+_SPANS_BY_ID = {}
 _PERM_CACHE = {}
 _DEVICE_CACHE = {}
-_INSTALLED = set()
-_PATCHED_LAYOUTS = set()
-_SPANS = {}
+_PERM_CACHE_LIMIT = 64
 
 
 def parse_blocks(spec, count):
@@ -60,7 +66,7 @@ def _install_block_index(model):
     blocks = getattr(model, "blocks", None)
     if blocks is None:
         return False
-    if id(model) in _BLOCK_INDEX_HOOKED:
+    if model in _BLOCK_INDEX_HOOKED:
         return True
 
     def make_hook(index):
@@ -73,7 +79,7 @@ def _install_block_index(model):
 
     for index, block in enumerate(blocks):
         block.register_forward_pre_hook(make_hook(index), with_kwargs=True)
-    _BLOCK_INDEX_HOOKED.add(id(model))
+    _BLOCK_INDEX_HOOKED.add(model)
     return True
 
 
@@ -104,6 +110,9 @@ def morton_perm(grid, device, curve="2d_frame"):
             code = part1by2(x) | (part1by2(y) << 1) | (part1by2(z) << 2)
         perm = linear[torch.argsort(code)]
         hit = (perm, torch.argsort(perm))
+        if len(_PERM_CACHE) >= _PERM_CACHE_LIMIT:
+            # Evict oldest entry; grids vary per resolution.
+            _PERM_CACHE.pop(next(iter(_PERM_CACHE)))
         _PERM_CACHE[key] = hit
     return hit[0].to(device), hit[1].to(device)
 
@@ -117,6 +126,8 @@ def _perm_for(grid, curve, device, start):
         if pad:
             perm = torch.roll(perm, pad)
             inverse = torch.argsort(perm)
+        if len(_DEVICE_CACHE) >= _PERM_CACHE_LIMIT:
+            _DEVICE_CACHE.pop(next(iter(_DEVICE_CACHE)))
         hit = (perm, inverse)
         _DEVICE_CACHE[key] = hit
     return hit
@@ -136,9 +147,26 @@ def _video_span(layout, latent_t, latent_h, latent_w):
     return start, stop, grid
 
 
+def _span_get(position_ids):
+    try:
+        return _SPANS.get(position_ids)
+    except TypeError:
+        return _SPANS_BY_ID.get(id(position_ids))
+
+
+def _span_set(position_ids, value):
+    try:
+        _SPANS[position_ids] = value
+    except TypeError:
+        _SPANS_BY_ID[id(position_ids)] = value
+        # Bound fallback dict; id-reuse risk is small but cap it.
+        if len(_SPANS_BY_ID) > 256:
+            _SPANS_BY_ID.pop(next(iter(_SPANS_BY_ID)))
+
+
 def _patch_packed_layout(module):
     layout_cls = getattr(module, "PackedLayout", None)
-    if layout_cls is None or id(layout_cls) in _PATCHED_LAYOUTS:
+    if layout_cls is None or layout_cls in _PATCHED_LAYOUTS:
         return
     original_init = layout_cls.__init__
 
@@ -150,14 +178,14 @@ def _patch_packed_layout(module):
             span = None
         bounds = next(((a, b) for a, b, kind in getattr(self, "segments", []) or [] if kind == "video"), None)
         if torch.is_tensor(getattr(self, "position_ids", None)) and bounds is not None:
-            _SPANS[id(self.position_ids)] = (self, bounds, span)
+            _span_set(self.position_ids, (self, bounds, span))
 
     layout_cls.__init__ = __init__
-    _PATCHED_LAYOUTS.add(id(layout_cls))
+    _PATCHED_LAYOUTS.add(layout_cls)
 
 
 def install_h3_morton(model):
-    if id(model) in _INSTALLED:
+    if model in _INSTALLED:
         return
     for attr in ("rope_freqs", "_forward", "blocks"):
         if not hasattr(model, attr):
@@ -190,7 +218,7 @@ def install_h3_morton(model):
     def rope_freqs(position_ids, device):
         model._sol_morton_span = None
         model._sol_morton_state = None
-        entry = _SPANS.get(id(position_ids))
+        entry = _span_get(position_ids)
         if entry is not None:
             _layout, bounds, span = entry
             options = getattr(model, "_sol_transformer_options", None)
@@ -252,11 +280,11 @@ def install_h3_morton(model):
     for block in model.blocks:
         block.register_forward_pre_hook(pre_hook)
     model.blocks[-1].register_forward_hook(post_hook)
-    _INSTALLED.add(id(model))
+    _INSTALLED.add(model)
 
 
 def install_wan_morton(diffusion_model):
-    if id(diffusion_model) in _INSTALLED:
+    if diffusion_model in _INSTALLED:
         return
     if not hasattr(diffusion_model, "blocks"):
         return
@@ -311,7 +339,7 @@ def install_wan_morton(diffusion_model):
     for block in blocks:
         block.register_forward_pre_hook(pre_hook, with_kwargs=True)
     last.register_forward_hook(post_hook, with_kwargs=True)
-    _INSTALLED.add(id(diffusion_model))
+    _INSTALLED.add(diffusion_model)
 
 
 class ApplySolAttn:
@@ -479,12 +507,14 @@ class ApplySolAttn:
         if diffusion_model is not None:
             _install_block_index(diffusion_model)
             model_type = getattr(diffusion_model, "__class__", type(diffusion_model)).__name__.lower()
-            is_h3 = "h3" in model_type or "minimax" in model_type or hasattr(diffusion_model, "patch_size")
             is_wan = "wan" in model_type
-            if is_h3:
-                install_h3_morton(diffusion_model)
-            elif is_wan and morton:
+            is_h3 = ("h3" in model_type or "minimax" in model_type) or (
+                hasattr(diffusion_model, "patch_size") and not is_wan
+            )
+            if is_wan and morton:
                 install_wan_morton(diffusion_model)
+            elif is_h3:
+                install_h3_morton(diffusion_model)
 
         sigma_start = None
         sigma_end = None

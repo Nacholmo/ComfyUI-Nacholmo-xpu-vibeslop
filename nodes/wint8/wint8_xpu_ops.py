@@ -26,51 +26,75 @@ import torch.nn.functional as F
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Float32 hard-enforce — Arc A770 has no fp64; inductor emits float64 by default.
+# Float32 hard-enforce — Arc has no fp64; inductor emits float64 by default.
+# Opt-out with NACHOLMO_WINT8_FP64_PATCH=0. Idempotent across double imports.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-torch.set_default_dtype(torch.float32)
-torch.set_float32_matmul_precision('high')
-
-# --- torch factory overrides ---
-_orig_torch_zeros = torch.zeros
-_orig_torch_ones = torch.ones
-_orig_torch_empty = torch.empty
-
-def _wint8_zeros(*a, **kw):
-    kw.setdefault('dtype', torch.float32)
-    return _orig_torch_zeros(*a, **kw)
-
-def _wint8_ones(*a, **kw):
-    kw.setdefault('dtype', torch.float32)
-    return _orig_torch_ones(*a, **kw)
-
-def _wint8_empty(*a, **kw):
-    kw.setdefault('dtype', torch.float32)
-    return _orig_torch_empty(*a, **kw)
-
-torch.zeros = _wint8_zeros
-torch.ones = _wint8_ones
-torch.empty = _wint8_empty
-
-# triton.language.zeros / tl.full monkey-patches intentionally omitted —
-# they break Triton 3.7.x AST visitor.
-
-# --- inductor async_compile.triton: float64 → float32 in generated kernel source ---
-try:
-    from torch._inductor.async_compile import triton as _inductor_triton
-    _orig_ind_triton = _inductor_triton
-    import torch._inductor.async_compile as _ac
-    def _patched_triton(src, *a, **kw):
-        if isinstance(src, str):
-            src = src.replace('tl.float64', 'tl.float32')
-        return _orig_ind_triton(src, *a, **kw)
-    _ac.triton = _patched_triton
-except Exception:
-    pass
-
-
 log = logging.getLogger("WINT8-XPU")
+
+_WINT8_FP64_PATCH = os.environ.get("NACHOLMO_WINT8_FP64_PATCH", "1") not in ("0", "false", "no", "off")
+
+if _WINT8_FP64_PATCH:
+    try:
+        torch.set_default_dtype(torch.float32)
+    except Exception:
+        pass
+    try:
+        torch.set_float32_matmul_precision('high')
+    except Exception:
+        pass
+
+    # --- torch factory overrides (only when dtype unspecified) ---
+    _orig_torch_zeros = getattr(torch.zeros, "_nacholmo_orig", torch.zeros)
+    _orig_torch_ones = getattr(torch.ones, "_nacholmo_orig", torch.ones)
+    _orig_torch_empty = getattr(torch.empty, "_nacholmo_orig", torch.empty)
+
+    def _wint8_zeros(*a, **kw):
+        kw.setdefault('dtype', torch.float32)
+        return _orig_torch_zeros(*a, **kw)
+
+    def _wint8_ones(*a, **kw):
+        kw.setdefault('dtype', torch.float32)
+        return _orig_torch_ones(*a, **kw)
+
+    def _wint8_empty(*a, **kw):
+        kw.setdefault('dtype', torch.float32)
+        return _orig_torch_empty(*a, **kw)
+
+    if not getattr(torch.zeros, "_nacholmo_patched", False):
+        _wint8_zeros._nacholmo_orig = _orig_torch_zeros
+        _wint8_zeros._nacholmo_patched = True
+        torch.zeros = _wint8_zeros
+    if not getattr(torch.ones, "_nacholmo_patched", False):
+        _wint8_ones._nacholmo_orig = _orig_torch_ones
+        _wint8_ones._nacholmo_patched = True
+        torch.ones = _wint8_ones
+    if not getattr(torch.empty, "_nacholmo_patched", False):
+        _wint8_empty._nacholmo_orig = _orig_torch_empty
+        _wint8_empty._nacholmo_patched = True
+        torch.empty = _wint8_empty
+
+    # triton.language.zeros / tl.full monkey-patches intentionally omitted —
+    # they break Triton 3.7.x AST visitor.
+
+    # --- inductor async_compile.triton: float64 → float32 in generated kernel source ---
+    try:
+        import torch._inductor.async_compile as _ac
+        _orig_ind_triton = getattr(getattr(_ac, "triton", None), "_nacholmo_orig", None) or _ac.triton
+
+        def _patched_triton(src, *a, **kw):
+            if isinstance(src, str):
+                src = src.replace('tl.float64', 'tl.float32')
+            return _orig_ind_triton(src, *a, **kw)
+
+        if not getattr(_ac.triton, "_nacholmo_patched", False):
+            _patched_triton._nacholmo_orig = _orig_ind_triton
+            _patched_triton._nacholmo_patched = True
+            _ac.triton = _patched_triton
+    except Exception:
+        pass
+else:
+    log.info("[WINT8] NACHOLMO_WINT8_FP64_PATCH=0 — skipping float32 enforcement")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Locate oneAPI icpx so stock Triton compiles its SYCL launcher stubs on Linux.
@@ -80,25 +104,46 @@ log = logging.getLogger("WINT8-XPU")
 
 def _find_icpx():
     icpx = shutil.which("icpx")
-    if icpx:
+    if icpx and os.access(icpx, os.X_OK):
         return icpx
 
     compiler_root = os.path.join(
         os.environ.get("ONEAPI_ROOT", "/opt/intel/oneapi"), "compiler")
 
     latest = os.path.join(compiler_root, "latest", "bin", "icpx")
-    if os.path.isfile(latest):
+    if os.path.isfile(latest) and os.access(latest, os.X_OK):
         return latest
+
+    def _version_key(p):
+        # Prefer newest versioned compiler dir (e.g. 2025.1.3); fall back to mtime.
+        try:
+            import re
+            dirname = os.path.basename(os.path.dirname(os.path.dirname(p)))
+            nums = tuple(int(x) for x in re.findall(r"\d+", dirname))
+            if nums:
+                return (1, nums)
+        except Exception:
+            pass
+        try:
+            return (0, (int(os.stat(p).st_mtime),))
+        except Exception:
+            return (0, (0,))
 
     candidates = []
     if os.path.isdir(compiler_root):
-        for entry in os.listdir(compiler_root):
+        try:
+            entries = os.listdir(compiler_root)
+        except OSError:
+            entries = []
+        for entry in entries:
             if entry == "latest":
                 continue
             p = os.path.join(compiler_root, entry, "bin", "icpx")
-            if os.path.isfile(p):
+            if os.path.isfile(p) and os.access(p, os.X_OK):
                 candidates.append(p)
-    return max(candidates) if candidates else None
+    if not candidates:
+        return None
+    return sorted(candidates, key=_version_key)[-1]
 
 
 def _configure_oneapi_for_triton():

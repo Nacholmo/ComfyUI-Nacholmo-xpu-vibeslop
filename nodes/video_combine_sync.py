@@ -154,6 +154,12 @@ class VideoCombineSync:
             return ((save_output, []),)
         if isinstance(images, torch.Tensor) and images.size(0) == 0:
             return ((save_output, []),)
+        format_type = (format.split("/")[0] if "/" in format else "image")
+        if format_type != "image" and not HAS_VHS:
+            raise RuntimeError(
+                "VideoCombineSync: video (ffmpeg) output requires 'comfyui-videohelpersuite' "
+                f"to be installed (looked in {_VHS_DIR}). Install it or use image/gif or image/webp."
+            )
         num_frames = len(images)
         pbar = ProgressBar(num_frames)
         first_image = images[0]
@@ -195,7 +201,11 @@ class VideoCombineSync:
 
             # Loop through the existing files
             matcher = re.compile(f"{re.escape(filename)}_(\\d+)\\D*\\..+", re.IGNORECASE)
-            for existing_file in os.listdir(full_output_folder):
+            try:
+                existing_files = os.listdir(full_output_folder)
+            except OSError:
+                existing_files = []
+            for existing_file in existing_files:
                 # Check if the file matches the expected format
                 match = matcher.fullmatch(existing_file)
                 if match:
@@ -337,8 +347,8 @@ class VideoCombineSync:
                     subprocess.run(pre_pass_args, input=images[0], env=env,
                                    capture_output=True, check=True)
                 except subprocess.CalledProcessError as e:
-                    raise Exception("An error occurred in the ffmpeg prepass:\n" \
-                            + e.stderr.decode(*ENCODE_ARGS))
+                    err = e.stderr.decode(*ENCODE_ARGS) if e.stderr else str(e)
+                    raise Exception("An error occurred in the ffmpeg prepass:\n" + err)
             if "inputs_main_pass" in video_format:
                 in_args_len = args.index("-i") + 2 # The index after ["-i", "-"]
                 args = args[:in_args_len] + video_format['inputs_main_pass'] + args[in_args_len:]
@@ -353,13 +363,33 @@ class VideoCombineSync:
                     merge_filter_args(args)
                     output_process = ffmpeg_process(args, video_format, video_metadata, file_path, env)
                 #Proceed to first yield
-                output_process.send(None)
+                try:
+                    output_process.send(None)
+                except Exception:
+                    try:
+                        output_process.close()
+                    except Exception:
+                        pass
+                    raise
                 if meta_batch is not None:
                     meta_batch.outputs[unique_id] = (counter, output_process)
 
-            for image in images:
-                pbar.update(1)
-                output_process.send(image)
+            try:
+                for image in images:
+                    pbar.update(1)
+                    output_process.send(image)
+            except Exception:
+                # Do not leak a live ffmpeg child on mid-encode failure.
+                try:
+                    output_process.close()
+                except Exception:
+                    pass
+                if meta_batch is not None:
+                    try:
+                        meta_batch.outputs.pop(unique_id, None)
+                    except Exception:
+                        pass
+                raise
             if meta_batch is not None:
                 requeue_workflow((meta_batch.unique_id, not meta_batch.has_closed_inputs))
             if meta_batch is None or meta_batch.has_closed_inputs:
@@ -385,7 +415,7 @@ class VideoCombineSync:
                 try:
                     #safely check if audio produced by VHS_LoadVideo actually exists
                     a_waveform = audio['waveform']
-                except:
+                except (KeyError, TypeError):
                     pass
             if a_waveform is not None:
                 # Create audio file if input was provided
@@ -423,8 +453,8 @@ class VideoCombineSync:
                     res = subprocess.run(mux_args, input=audio_data,
                                          env=env, capture_output=True, check=True)
                 except subprocess.CalledProcessError as e:
-                    raise Exception("An error occured in the ffmpeg subprocess:\n" \
-                            + e.stderr.decode(*ENCODE_ARGS))
+                    err = e.stderr.decode(*ENCODE_ARGS) if e.stderr else str(e)
+                    raise Exception("An error occured in the ffmpeg subprocess:\n" + err)
                 if res.stderr:
                     print(res.stderr.decode(*ENCODE_ARGS), end="", file=sys.stderr)
                 output_files.append(output_file_with_audio_path)
@@ -433,8 +463,11 @@ class VideoCombineSync:
                 file = output_file_with_audio
         if extra_options.get('VHS_KeepIntermediate', True) == False:
             for intermediate in output_files[1:-1]:
-                if os.path.exists(intermediate):
-                    os.remove(intermediate)
+                try:
+                    if os.path.exists(intermediate):
+                        os.remove(intermediate)
+                except OSError:
+                    pass
         preview = {
                 "filename": file,
                 "subfolder": subfolder,
