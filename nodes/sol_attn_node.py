@@ -13,11 +13,12 @@ log = logging.getLogger("ComfyUI-Nacholmo-xpu-vibeslop")
 _BLOCK_INDEX_HOOKED = weakref.WeakSet()
 _INSTALLED = weakref.WeakSet()
 _PATCHED_LAYOUTS = weakref.WeakSet()
-# position_ids tensor -> (layout, bounds, span); WeakKeyDictionary so entries
-# vanish with the tensor instead of leaking via id() reuse-after-GC.
-_SPANS = weakref.WeakKeyDictionary()
-# Fallback for tensors that cannot be weak-referenced (rare): id -> entry.
+# position_ids tensor id -> (layout, bounds, span). Tensors cannot be used as
+# WeakKeyDictionary keys: Tensor.__eq__ returns a Tensor, so weakref equality
+# raises "Boolean value of Tensor ... is ambiguous". Use id() plus a weakref
+# cleanup callback so entries vanish with the tensor (no leak, no id-reuse).
 _SPANS_BY_ID = {}
+_SPANS_REFS = {}
 _PERM_CACHE = {}
 _DEVICE_CACHE = {}
 _PERM_CACHE_LIMIT = 64
@@ -149,19 +150,30 @@ def _video_span(layout, latent_t, latent_h, latent_w):
 
 def _span_get(position_ids):
     try:
-        return _SPANS.get(position_ids)
-    except TypeError:
         return _SPANS_BY_ID.get(id(position_ids))
+    except Exception:
+        return None
 
 
 def _span_set(position_ids, value):
     try:
-        _SPANS[position_ids] = value
+        key = id(position_ids)
+    except Exception:
+        return
+    _SPANS_BY_ID[key] = value
+    # Auto-evict when the tensor dies to avoid id-reuse-after-GC.
+    try:
+        def _cleanup(_ref, _key=key):
+            _SPANS_BY_ID.pop(_key, None)
+            _SPANS_REFS.pop(_key, None)
+        _SPANS_REFS[key] = weakref.ref(position_ids, _cleanup)
     except TypeError:
-        _SPANS_BY_ID[id(position_ids)] = value
-        # Bound fallback dict; id-reuse risk is small but cap it.
-        if len(_SPANS_BY_ID) > 256:
-            _SPANS_BY_ID.pop(next(iter(_SPANS_BY_ID)))
+        # Not weak-referenceable: bound the dict instead.
+        pass
+    if len(_SPANS_BY_ID) > 256:
+        oldest = next(iter(_SPANS_BY_ID))
+        _SPANS_BY_ID.pop(oldest, None)
+        _SPANS_REFS.pop(oldest, None)
 
 
 def _patch_packed_layout(module):
