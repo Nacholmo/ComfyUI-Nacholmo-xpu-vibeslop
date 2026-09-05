@@ -127,7 +127,19 @@ def main():
             msg = conn.recv()
         except (EOFError, KeyboardInterrupt):
             break
+        except Exception as e:
+            try:
+                conn.send({"status": "error", "error": f"IPC recv failed: {e}", "traceback": traceback.format_exc()})
+            except Exception:
+                break
+            continue
 
+        if not isinstance(msg, dict):
+            try:
+                conn.send({"status": "error", "error": f"Invalid IPC message (expected dict, got {type(msg).__name__})"})
+            except Exception:
+                break
+            continue
         cmd = msg.get("cmd")
         if cmd == "exit":
             break
@@ -158,10 +170,19 @@ def main():
                     c4 = shape[3].get_length() if not shape[3].is_dynamic else None
                     if c2 == 3:
                         layout = "NCHW"
+                        probe_channels = 3
                     elif c4 == 3:
                         layout = "NHWC"
+                        probe_channels = 3
+                    elif c2 is not None and c2 > 0:
+                        layout = "NCHW"
+                        probe_channels = int(c2)
+                    elif c4 is not None and c4 > 0:
+                        layout = "NHWC"
+                        probe_channels = int(c4)
                     else:
                         layout = "NCHW"
+                        probe_channels = 3
 
                     config = {}
                     if precision == "auto / fp16 (fastest)":
@@ -176,17 +197,23 @@ def main():
 
                     compiled = core.compile_model(model, "GPU", config)
                     req = compiled.create_infer_request()
-                    probe = _infer_patch(req, np.zeros((128, 128, 3), np.float32), layout)
+                    probe = _infer_patch(req, np.zeros((128, 128, probe_channels), np.float32), layout)
                     del req
                     model_scale = probe.shape[0] // 128
                     if model_scale < 1 or probe.shape[:2] != (128 * model_scale, 128 * model_scale):
-                        raise ValueError(f"{name}: unexpected output shape {probe.shape} for a 128x128 RGB input")
+                        raise ValueError(f"{name}: unexpected output shape {probe.shape} for a 128x128 input with {probe_channels} channels")
 
                     current_model_key = key
 
-                conn.send({"status": "ok", "layout": layout, "scale": model_scale})
+                try:
+                    conn.send({"status": "ok", "layout": layout, "scale": model_scale})
+                except Exception:
+                    pass
             except Exception as e:
-                conn.send({"status": "error", "error": str(e), "traceback": traceback.format_exc()})
+                try:
+                    conn.send({"status": "error", "error": str(e), "traceback": traceback.format_exc()})
+                except Exception:
+                    pass
 
         elif cmd == "upscale":
             in_shm = None
@@ -194,14 +221,24 @@ def main():
             req = None
             in_shm_name = msg.get("in_shm_name")
             out_shm_name = msg.get("out_shm_name")
+            if compiled is None:
+                try:
+                    conn.send({"status": "error", "error": "No model loaded (send load_model before upscale)"})
+                except Exception:
+                    pass
+                continue
             try:
-                in_shape = msg["in_shape"]
-                out_shape = msg["out_shape"]
+                in_shape = tuple(int(v) for v in msg["in_shape"])
+                out_shape = tuple(int(v) for v in msg["out_shape"])
+                if len(in_shape) != 4 or len(out_shape) != 4:
+                    raise ValueError(f"expected 4D in/out shapes, got {msg['in_shape']} / {msg['out_shape']}")
                 spill_path = msg.get("spill_path")
-                tile_size = msg["tile_size"]
-                tile_overlap = msg["tile_overlap"]
-                target_w = msg["target_w"]
-                target_h = msg["target_h"]
+                tile_size = int(msg.get("tile_size", 512))
+                tile_overlap = int(msg.get("tile_overlap", 64))
+                target_w = int(msg["target_w"])
+                target_h = int(msg["target_h"])
+                if target_w < 1 or target_h < 1:
+                    raise ValueError(f"invalid target dims {target_w}x{target_h}")
 
                 in_shm = shared_memory.SharedMemory(name=in_shm_name)
                 _unregister_shm(in_shm_name)
@@ -212,6 +249,8 @@ def main():
                     _unregister_shm(out_shm_name)
                     out_arr = np.ndarray(out_shape, dtype=np.float32, buffer=out_shm.buf)
                 else:
+                    if not spill_path:
+                        raise ValueError("upscale request has neither out_shm_name nor spill_path")
                     out_arr = np.memmap(spill_path, dtype=np.float32, mode="r+", shape=out_shape)
 
                 b, h, w, c = in_shape
@@ -228,14 +267,27 @@ def main():
 
                     np.clip(up, 0.0, 1.0, out=up)
                     out_arr[i] = up
-                    conn.send({"status": "progress", "frame": i, "total": b})
+                    try:
+                        conn.send({"status": "progress", "frame": i, "total": b})
+                    except Exception:
+                        # Parent went away; stop work and let outer loop exit.
+                        break
 
                 if spill_path:
-                    out_arr.flush()
+                    try:
+                        out_arr.flush()
+                    except Exception:
+                        pass
 
-                conn.send({"status": "done"})
+                try:
+                    conn.send({"status": "done"})
+                except Exception:
+                    pass
             except Exception as e:
-                conn.send({"status": "error", "error": str(e), "traceback": traceback.format_exc()})
+                try:
+                    conn.send({"status": "error", "error": str(e), "traceback": traceback.format_exc()})
+                except Exception:
+                    pass
             finally:
                 if req is not None:
                     del req

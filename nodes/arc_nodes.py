@@ -4,6 +4,7 @@
 import os
 import re
 import tempfile
+import threading
 import time
 import weakref
 from enum import Enum
@@ -95,6 +96,14 @@ def detect_scale_from_filename(filename: str) -> int | None:
 
 _WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "arc_openvino_worker.py")
 
+# Serializes access to the single worker connection; ComfyUI may queue or
+# interleave node executions and the AF_UNIX conn is not thread-safe.
+_WORKER_LOCK = threading.RLock()
+
+# Timeouts so a crashed worker fails fast instead of hanging ComfyUI.
+_WORKER_START_TIMEOUT = float(os.environ.get("ARC_WORKER_START_TIMEOUT", "30.0"))
+_WORKER_REPLY_TIMEOUT = float(os.environ.get("ARC_WORKER_REPLY_TIMEOUT", "120.0"))
+
 
 class _ArcWorkerClient:
     def __init__(self):
@@ -117,18 +126,41 @@ class _ArcWorkerClient:
         from multiprocessing.connection import Listener
         fd, self.sock_path = tempfile.mkstemp(prefix="arc_worker_", suffix=".sock")
         os.close(fd)
-        os.unlink(self.sock_path)
+        try:
+            os.unlink(self.sock_path)
+        except OSError:
+            pass
 
         self.listener = Listener(self.sock_path, family="AF_UNIX")
+        # Bound the blocking accept() so a worker that dies pre-connect
+        # raises instead of hanging ComfyUI forever.
+        try:
+            inner_sock = getattr(getattr(self.listener, "_listener", None), "_socket", None)
+            if inner_sock is not None:
+                inner_sock.settimeout(_WORKER_START_TIMEOUT)
+        except Exception:
+            pass
 
         args = [sys.executable, _WORKER_SCRIPT, self.sock_path]
         if _CACHE_DIR:
             args.append(_CACHE_DIR)
 
         self.proc = subprocess.Popen(args)
-        self.conn = self.listener.accept()
-        self.listener.close()
-        self.listener = None
+        try:
+            self.conn = self.listener.accept()
+        except Exception as e:
+            self.stop()
+            raise RuntimeError(f"Arc OpenVINO worker failed to start (no IPC connect): {e}") from e
+        finally:
+            try:
+                self.listener.close()
+            except Exception:
+                pass
+            self.listener = None
+        # A freshly connected worker has no model loaded.
+        self.loaded_key = None
+        self.layout = None
+        self.model_scale = None
 
     def stop(self):
         had_proc = self.proc is not None
@@ -167,25 +199,47 @@ class _ArcWorkerClient:
         return had_proc
 
     def load_model(self, path: str, precision: str, performance_mode: str):
-        key = (path, os.stat(path).st_mtime_ns, precision, performance_mode)
+        try:
+            mtime = os.stat(path).st_mtime_ns
+        except OSError as e:
+            raise RuntimeError(f"Arc OpenVINO model not found or unreadable: {path} ({e})") from e
+        key = (path, mtime, precision, performance_mode)
         if self.is_alive() and self.loaded_key == key:
             return self.layout, self.model_scale
 
-        self.start()
-        self.conn.send({
-            "cmd": "load_model",
-            "path": path,
-            "precision": precision,
-            "performance_mode": performance_mode
-        })
-        resp = self.conn.recv()
-        if resp.get("status") != "ok":
+        with _WORKER_LOCK:
+            self.start()
+            try:
+                self.conn.send({
+                    "cmd": "load_model",
+                    "path": path,
+                    "precision": precision,
+                    "performance_mode": performance_mode
+                })
+            except Exception as e:
+                self.stop()
+                raise RuntimeError(f"Arc OpenVINO worker IPC send failed: {e}") from e
+            if not self.conn.poll(_WORKER_REPLY_TIMEOUT):
+                self.stop()
+                raise RuntimeError(
+                    f"Arc OpenVINO worker timed out loading model after {_WORKER_REPLY_TIMEOUT:.0f}s: {os.path.basename(path)}"
+                )
+            try:
+                resp = self.conn.recv()
+            except Exception as e:
+                self.stop()
+                raise RuntimeError(f"Arc OpenVINO worker IPC recv failed: {e}") from e
+        if not isinstance(resp, dict) or resp.get("status") != "ok":
+            err = resp.get("error") if isinstance(resp, dict) else f"unexpected reply {resp!r:.200}"
             self.stop()
-            raise RuntimeError(f"Arc OpenVINO worker failed to load model: {resp.get('error')}")
+            raise RuntimeError(f"Arc OpenVINO worker failed to load model: {err}")
 
         self.loaded_key = key
-        self.layout = resp["layout"]
-        self.model_scale = resp["scale"]
+        self.layout = resp.get("layout")
+        self.model_scale = resp.get("scale")
+        if not isinstance(self.model_scale, int) or self.model_scale < 1:
+            self.stop()
+            raise RuntimeError(f"Arc OpenVINO worker returned invalid scale: {self.model_scale!r}")
         return self.layout, self.model_scale
 
 
@@ -305,19 +359,26 @@ class ArcLoadedModel:
 if hasattr(comfy.model_management, "unload_all_models"):
     _orig_unload_all_models = comfy.model_management.unload_all_models
 
-    def _patched_unload_all_models():
+    def _patched_unload_all_models(*args, **kwargs):
         try:
             unload_arc_models()
         except Exception:
             pass
-        return _orig_unload_all_models()
+        return _orig_unload_all_models(*args, **kwargs)
 
-    comfy.model_management.unload_all_models = _patched_unload_all_models
+    # Keep idempotent across double imports (Comfy may load module twice in tests).
+    if getattr(comfy.model_management.unload_all_models, "_nacholmo_arc_patched", False) is not True:
+        _patched_unload_all_models._nacholmo_arc_patched = True
+        comfy.model_management.unload_all_models = _patched_unload_all_models
 
 
 def _load_model(path, precision: str = PrecisionMode.AUTO_FP16.value, performance_mode: str = PerformanceMode.THROUGHPUT.value):
     global _loaded_wrapper
-    key = (path, os.stat(path).st_mtime_ns, precision, performance_mode)
+    try:
+        mtime = os.stat(path).st_mtime_ns
+    except OSError as e:
+        raise RuntimeError(f"Arc OpenVINO model not found or unreadable: {path} ({e})") from e
+    key = (path, mtime, precision, performance_mode)
     if _WORKER.is_alive() and _WORKER.loaded_key == key and _loaded_wrapper is not None:
         for m in comfy.model_management.current_loaded_models:
             if isinstance(m, ArcLoadedModel) and m.model is _loaded_wrapper:
@@ -411,106 +472,159 @@ class ArcSuperResolution:
 
         spill_path = None
         out_shm = None
-        if out_bytes > available // 2:
-            fd, spill_path = tempfile.mkstemp(suffix=".f32", dir=folder_paths.get_temp_directory())
-            os.close(fd)
-            with open(spill_path, "wb") as f:
-                f.truncate(out_bytes)
-        else:
-            out_shm = shared_memory.SharedMemory(create=True, size=out_bytes)
+        spill_owned = False  # True until out_tensor takes ownership via finalize
+        try:
+            if out_bytes > available // 2:
+                fd, spill_path = tempfile.mkstemp(suffix=".f32", dir=folder_paths.get_temp_directory())
+                os.close(fd)
+                with open(spill_path, "wb") as f:
+                    f.truncate(out_bytes)
+                spill_owned = True
+            else:
+                try:
+                    out_shm = shared_memory.SharedMemory(create=True, size=out_bytes)
+                except OSError as e:
+                    # SHM exhausted (e.g. /dev/shm full on long batches): fall back to memmap spill.
+                    log.warning(f"[Arc Super Resolution] SharedMemory failed ({e}); falling back to memmap spill.")
+                    fd, spill_path = tempfile.mkstemp(suffix=".f32", dir=folder_paths.get_temp_directory())
+                    os.close(fd)
+                    with open(spill_path, "wb") as f:
+                        f.truncate(out_bytes)
+                    spill_owned = True
+        except Exception:
+            if spill_path is not None:
+                _cleanup_spill(spill_path)
+            raise
 
-        in_shm = shared_memory.SharedMemory(create=True, size=in_bytes)
+        try:
+            in_shm = shared_memory.SharedMemory(create=True, size=in_bytes)
+        except OSError as e:
+            if spill_path is not None and spill_owned:
+                _cleanup_spill(spill_path)
+            if out_shm is not None:
+                try:
+                    out_shm.close()
+                    out_shm.unlink()
+                except Exception:
+                    pass
+            raise MemoryError(
+                f"Arc Super Resolution: cannot allocate input SharedMemory ({in_bytes/1e6:.0f} MB, {e}). "
+                "Try a smaller batch or tile_size."
+            ) from e
         try:
             in_arr = np.ndarray((b, h, w, c), dtype=np.float32, buffer=in_shm.buf)
             in_arr[:] = images.cpu().numpy()
 
-            _WORKER.conn.send({
-                "cmd": "upscale",
-                "in_shm_name": in_shm.name,
-                "in_shape": (b, h, w, c),
-                "out_shm_name": out_shm.name if out_shm else None,
-                "out_shape": (b, out_h, out_w, c),
-                "spill_path": spill_path,
-                "tile_size": tile_size,
-                "tile_overlap": tile_overlap,
-                "target_w": out_w,
-                "target_h": out_h
-            })
+            # Hold the worker lock for the whole send -> done transaction so
+            # concurrent queued executions cannot interleave replies.
+            with _WORKER_LOCK:
+                try:
+                    _WORKER.conn.send({
+                        "cmd": "upscale",
+                        "in_shm_name": in_shm.name,
+                        "in_shape": (b, h, w, c),
+                        "out_shm_name": out_shm.name if out_shm else None,
+                        "out_shape": (b, out_h, out_w, c),
+                        "spill_path": spill_path,
+                        "tile_size": tile_size,
+                        "tile_overlap": tile_overlap,
+                        "target_w": out_w,
+                        "target_h": out_h
+                    })
+                except Exception as e:
+                    raise RuntimeError(f"Arc Super Resolution worker IPC send failed: {e}") from e
 
-            pbar = comfy.utils.ProgressBar(b)
-            t_start = time.perf_counter()
+                pbar = comfy.utils.ProgressBar(b)
+                t_start = time.perf_counter()
 
-            # Single-line terminal bar — clean like sampler: `100%|████| 3/3 [01:39<00:00, 33.33s/it]`
-            # Uses tqdm when available (auto handles rate/ETA), fallback mimics same format without duplication.
-            term_pbar = None
-            use_tqdm = False
-            last_fallback = t_start
-            try:
-                from tqdm.auto import tqdm as _tqdm  # type: ignore
-
-                # tqdm auto-detects non-tty and disables itself gracefully
-                term_pbar = _tqdm(
-                    total=b,
-                    desc="Arc Super Resolution",
-                    unit="frame",
-                    dynamic_ncols=True,
-                    leave=True,
-                    mininterval=0.2,
-                )
-                use_tqdm = True
-            except Exception:
+                # Single-line terminal bar — clean like sampler: `100%|████| 3/3 [01:39<00:00, 33.33s/it]`
+                # Uses tqdm when available (auto handles rate/ETA), fallback mimics same format without duplication.
                 term_pbar = None
                 use_tqdm = False
+                last_fallback = t_start
+                try:
+                    from tqdm.auto import tqdm as _tqdm  # type: ignore
 
-            def _fmt_time(s: float) -> str:
-                s = int(s)
-                m, sec = divmod(s, 60)
-                h, m = divmod(m, 60)
-                return f"{h:02d}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
+                    # tqdm auto-detects non-tty and disables itself gracefully
+                    term_pbar = _tqdm(
+                        total=b,
+                        desc="Arc Super Resolution",
+                        unit="frame",
+                        dynamic_ncols=True,
+                        leave=True,
+                        mininterval=0.2,
+                    )
+                    use_tqdm = True
+                except Exception:
+                    term_pbar = None
+                    use_tqdm = False
 
-            try:
-                while True:
-                    comfy.model_management.throw_exception_if_processing_interrupted()
-                    if _WORKER.conn.poll(0.05):
-                        msg = _WORKER.conn.recv()
-                        if msg.get("status") == "error":
-                            raise RuntimeError(f"Arc Super Resolution worker error: {msg.get('error')}\n{msg.get('traceback', '')}")
-                        elif msg.get("status") == "progress":
-                            i = msg["frame"]
-                            pbar.update(1)
-                            if use_tqdm and term_pbar is not None:
-                                # Let tqdm render rate + ETA itself — no manual postfix (avoids `1.55frame/s, 1.52 fps, ETA 99.9s` duplication)
-                                term_pbar.update(1)
+                def _fmt_time(s: float) -> str:
+                    s = int(s)
+                    m, sec = divmod(s, 60)
+                    h, m = divmod(m, 60)
+                    return f"{h:02d}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
+
+                try:
+                    while True:
+                        comfy.model_management.throw_exception_if_processing_interrupted()
+                        if not _WORKER.is_alive():
+                            raise RuntimeError("Arc Super Resolution worker died mid-upscale (process exited).")
+                        if _WORKER.conn.poll(0.05):
+                            try:
+                                msg = _WORKER.conn.recv()
+                            except Exception as e:
+                                raise RuntimeError(f"Arc Super Resolution worker IPC recv failed: {e}") from e
+                            if not isinstance(msg, dict):
+                                raise RuntimeError(f"Arc Super Resolution worker sent invalid reply: {msg!r:.200}")
+                            status = msg.get("status")
+                            if status == "error":
+                                raise RuntimeError(f"Arc Super Resolution worker error: {msg.get('error')}\n{msg.get('traceback', '')}")
+                            elif status == "progress":
+                                i = int(msg.get("frame", 0))
+                                pbar.update(1)
+                                if use_tqdm and term_pbar is not None:
+                                    # Let tqdm render rate + ETA itself — no manual postfix (avoids `1.55frame/s, 1.52 fps, ETA 99.9s` duplication)
+                                    term_pbar.update(1)
+                                else:
+                                    # Fallback: throttled in-place bar via \r (one line, overwrites itself) — same clean format as tqdm
+                                    now = time.perf_counter()
+                                    if (now - last_fallback >= 0.5) or (i == b - 1):
+                                        elapsed = now - t_start
+                                        fps = (i + 1) / elapsed if elapsed > 0 else 0.0
+                                        remaining = (b - (i + 1)) / fps if fps > 0 else 0.0
+                                        pct = ((i + 1) / b) * 100
+                                        bar_w = 30
+                                        filled = int(bar_w * (i + 1) / b)
+                                        bar = "█" * filled + "░" * (bar_w - filled)
+                                        msg_str = f"\rArc Super Resolution: {pct:3.0f}%|{bar}| {i + 1}/{b} [{_fmt_time(elapsed)}<{_fmt_time(remaining)}, {fps:.2f} frame/s]"
+                                        # pad to clear previous longer line
+                                        print(msg_str.ljust(100), end="", flush=True)
+                                        last_fallback = now
+                                        if i == b - 1:
+                                            print()
+                            elif status == "done":
+                                break
                             else:
-                                # Fallback: throttled in-place bar via \r (one line, overwrites itself) — same clean format as tqdm
-                                now = time.perf_counter()
-                                if (now - last_fallback >= 0.5) or (i == b - 1):
-                                    elapsed = now - t_start
-                                    fps = (i + 1) / elapsed if elapsed > 0 else 0.0
-                                    remaining = (b - (i + 1)) / fps if fps > 0 else 0.0
-                                    pct = ((i + 1) / b) * 100
-                                    bar_w = 30
-                                    filled = int(bar_w * (i + 1) / b)
-                                    bar = "█" * filled + "░" * (bar_w - filled)
-                                    msg_str = f"\rArc Super Resolution: {pct:3.0f}%|{bar}| {i + 1}/{b} [{_fmt_time(elapsed)}<{_fmt_time(remaining)}, {fps:.2f} frame/s]"
-                                    # pad to clear previous longer line
-                                    print(msg_str.ljust(100), end="", flush=True)
-                                    last_fallback = now
-                                    if i == b - 1:
-                                        print()
-                        elif msg.get("status") == "done":
-                            break
-            finally:
-                if term_pbar is not None:
-                    try:
-                        term_pbar.close()
-                    except Exception:
-                        pass
+                                raise RuntimeError(f"Arc Super Resolution worker sent unknown status: {status!r}")
+                finally:
+                    if term_pbar is not None:
+                        try:
+                            term_pbar.close()
+                        except Exception:
+                            pass
 
             if spill_path is not None:
-                storage = torch.UntypedStorage.from_file(spill_path, False, out_bytes)
-                out_tensor = torch.empty((b, out_h, out_w, c), dtype=torch.float32)
-                out_tensor.set_(storage, 0, (b, out_h, out_w, c))
+                try:
+                    storage = torch.UntypedStorage.from_file(spill_path, False, out_bytes)
+                    out_tensor = torch.empty((b, out_h, out_w, c), dtype=torch.float32)
+                    out_tensor.set_(storage, 0, (b, out_h, out_w, c))
+                except Exception:
+                    # Do not orphan the spill file if wrapping fails.
+                    if spill_owned:
+                        _cleanup_spill(spill_path)
+                    raise
+                spill_owned = False
                 weakref.finalize(out_tensor, _cleanup_spill, spill_path)
             else:
                 out_arr = np.ndarray((b, out_h, out_w, c), dtype=np.float32, buffer=out_shm.buf)
@@ -519,11 +633,26 @@ class ArcSuperResolution:
             return (out_tensor,)
 
         finally:
-            in_shm.close()
-            in_shm.unlink()
+            try:
+                in_shm.close()
+            except Exception:
+                pass
+            try:
+                in_shm.unlink()
+            except Exception:
+                pass
             if out_shm is not None:
-                out_shm.close()
-                out_shm.unlink()
+                try:
+                    out_shm.close()
+                except Exception:
+                    pass
+                try:
+                    out_shm.unlink()
+                except Exception:
+                    pass
+            if spill_path is not None and spill_owned:
+                # Upscale failed before out_tensor took ownership: clean up.
+                _cleanup_spill(spill_path)
 
 
 class ArcResampleFPS:
