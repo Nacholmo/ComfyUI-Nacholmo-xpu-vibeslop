@@ -61,9 +61,13 @@ def _snap_overlap(overlap):
 
     Split cut s is cycle-aligned (s = 2 + 5*k1) and chunk 2 length is
     T2 = T_total - s + overlap, so (T2 - 2) % 5 == (overlap - 2) % 5.
-    Only overlap % 5 == 2 keeps both chunks valid.
+    Only overlap % 5 == 2 keeps both chunks valid. 0 means no overlap
+    (hard cut) and is passed through for Stitch plain-concat paths.
     """
-    overlap = max(1, int(overlap))
+    overlap = int(overlap)
+    if overlap <= 0:
+        return 0
+    overlap = max(1, overlap)
     snapped = 2 + 5 * round((overlap - 2) / 5)
     return max(1, snapped)
 
@@ -143,6 +147,11 @@ class MiniMaxH3LatentSplit:
 
         if T_total < 4:
             raise ValueError(f"Latent is too short to split (T={T_total})")
+        if T_total - overlap < 4:
+            raise ValueError(
+                f"Latent too short for overlap={overlap} (T={T_total}); "
+                "use a longer latent or smaller overlap."
+            )
 
         # Snap total to valid k if possible
         if (T_total - 2) % 5 == 0:
@@ -250,7 +259,9 @@ class MiniMaxH3AttachContext:
 
         if is_av and audio is not None:
             ctx_audio_t = audio.shape[-1]
-            n_audio = min(int(round(_context_span(n_frames))), ctx_audio_t)
+            # Map latent-frame overlap to audio-latent overlap with the same
+            # pixel-frame math used by split/stitch (not RoPE cursor time).
+            n_audio = min(int(_audio_overlap_for_video_overlap(n_frames)), ctx_audio_t)
             if n_audio > 0:
                 ctx_audio = audio[..., ctx_audio_t - n_audio:].contiguous()
                 keyframes.append(
@@ -299,7 +310,18 @@ class MiniMaxH3AssembleAV:
         video = video_latent.get("samples")
         if _is_nested_samples(video):
             video = video.tensors[0]
-        if audio_latent is None or audio_latent.get("samples") is None or audio_latent["samples"].numel() == 0:
+
+        def _is_empty(samples):
+            if samples is None:
+                return True
+            try:
+                if _is_nested_samples(samples):
+                    return all(t.numel() == 0 for t in samples.tensors)
+                return samples.numel() == 0
+            except Exception:
+                return False
+
+        if audio_latent is None or _is_empty(audio_latent.get("samples")):
             return ({"samples": video},)
         audio = audio_latent["samples"]
         if _is_nested_samples(audio):
@@ -397,9 +419,11 @@ class MiniMaxH3LatentStitch:
             ov1 = v1[:, :, -overlap:]
             ov2 = v2[:, :, :overlap]
             raw_blend = (1.0 - w) * ov1 + w * ov2
+            # Clamp std floor so flat patches don't blow up (1e-6 -> 1e-3).
+            raw_std = raw_blend.std(dim=(-2, -1), keepdim=True).clamp_min(1e-3)
             target_std = (1.0 - w) * ov1.std(dim=(-2, -1), keepdim=True) + w * ov2.std(dim=(-2, -1), keepdim=True)
             target_mean = (1.0 - w) * ov1.mean(dim=(-2, -1), keepdim=True) + w * ov2.mean(dim=(-2, -1), keepdim=True)
-            v_overlap = (raw_blend - raw_blend.mean(dim=(-2, -1), keepdim=True)) / (raw_blend.std(dim=(-2, -1), keepdim=True) + 1e-6) * target_std + target_mean
+            v_overlap = (raw_blend - raw_blend.mean(dim=(-2, -1), keepdim=True)) / raw_std * target_std + target_mean
             v_stitched = torch.cat([v1[:, :, :-overlap], v_overlap, v2[:, :, overlap:]], dim=2)
 
             if is_av1 and is_av2 and a1 is not None and a2 is not None and a_ov > 0:

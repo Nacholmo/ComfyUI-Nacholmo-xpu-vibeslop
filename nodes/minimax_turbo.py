@@ -174,6 +174,11 @@ def _turbo_sampler(model, x, sigmas, extra_args=None, callback=None, disable=Non
             "MiniMaxH3TurboSampler expects the MiniMax-H3 video+audio latent "
             "(the EmptyMiniMaxH3LatentAV / MiniMaxH3ImageToVideo output).")
     v_numel = math.prod(shapes[0][1:])           # flat pack is [video | audio]
+    if v_numel <= 0 or v_numel >= x.shape[-1]:
+        raise RuntimeError(
+            f"MiniMaxH3TurboSampler: invalid video/audio split v_numel={v_numel} "
+            f"for packed dim {x.shape[-1]} (shapes={shapes}). Refusing to corrupt A/V."
+        )
     a_numel = (x.shape[-1] - v_numel)
     print(f"[H3TURBO sampler] legacy dual-schedule (no native ModelSamplingAV)  "
           f"sigmas={[round(float(s),4) for s in sigmas]}  x.shape={tuple(x.shape)} "
@@ -212,7 +217,15 @@ def _egrid():
     global _EGRID
     if _EGRID is None:
         p = os.path.join(os.path.dirname(__file__), "h3_silu_temb_grid.safetensors")
-        _EGRID = comfy.utils.load_torch_file(p)["silu_t_emb_grid"]   # [1025, 2688]
+        if not os.path.isfile(p):
+            raise FileNotFoundError(
+                f"MiniMaxH3TurboLoRA: missing bundled grid file {p}. "
+                "Pruned/curve H3 bases need h3_silu_temb_grid.safetensors next to minimax_turbo.py."
+            )
+        try:
+            _EGRID = comfy.utils.load_torch_file(p)["silu_t_emb_grid"]   # [1025, 2688]
+        except Exception as e:
+            raise RuntimeError(f"MiniMaxH3TurboLoRA: failed to load grid file {p}: {e}") from e
     return _EGRID
 
 
@@ -281,10 +294,16 @@ def _make_adaln_forward(base, a, b, shared, table=None, egrid=None):
         if st is None:
             st = shared.get("silu_temb")                  # legacy _unique_t path
 
-        if st is not None and st.shape[0] == x.shape[0]:
-            av = a.to(x.device, x.dtype)
-            bv = b.to(x.device, x.dtype)
-            sv = st.to(x.device, x.dtype)
+        if st is not None:
+            if st.shape[0] != x.shape[0]:
+                # Row mismatch means the LoRA would silently do nothing; log once.
+                if not getattr(forward, "_nacholmo_row_warned", False):
+                    forward._nacholmo_row_warned = True
+                    print(f"[H3TURBO adaln] row mismatch st={tuple(st.shape)} x={tuple(x.shape)} — skipping delta this call", flush=True)
+            else:
+                av = a.to(x.device, x.dtype)
+                bv = b.to(x.device, x.dtype)
+                sv = st.to(x.device, x.dtype)
             x = x + (bv @ (av @ sv.T)).T                              # [M, out]
         x = x.view(x.shape[0] * base.modalities, base.expand * base.hidden)
         return x.chunk(base.expand, dim=-1)
@@ -467,13 +486,20 @@ def _inject_adaln_egrid(new_model, dm, lora, adaln, strength):
         shared["silu_temb"] = _interp_egrid(us, E, ctx.device, ctx.dtype)
         return executor(*args, **kwargs)
 
+    new_model.remove_wrappers_with_key(comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL, "h3turbo")
     new_model.add_wrapper_with_key(
         comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL, "h3turbo", wrap)
     has_prefix = _model_has_diffusion_prefix(new_model)
     for name in adaln:                       # name = "....adaln_proj.linear" (may include diffusion_model. prefix)
         # lora dict lookup uses full name as stored (with prefix if present)
-        a = lora[name + ".lora_A.weight"]
-        b = lora[name + ".lora_B.weight"] * strength
+        try:
+            a = lora[name + ".lora_A.weight"]
+            b = lora[name + ".lora_B.weight"] * strength
+        except KeyError:
+            # Prefix drift between LoRA file and model (diffusion_model. or not): try alternate.
+            alt_name = name[len("diffusion_model."):] if name.startswith("diffusion_model.") else f"diffusion_model.{name}"
+            a = lora[alt_name + ".lora_A.weight"]
+            b = lora[alt_name + ".lora_B.weight"] * strength
         base = name.rsplit(".linear", 1)[0]
         key = _normalize_target_key(base, has_prefix)
         # get_model_object needs the same key the patcher understands;
@@ -534,8 +560,11 @@ def _add_dbg_wrapper(new_model, dm, tag, mode):
                   f"video_rms={vr:.4f} audio_rms={ar:.4f} dtype={dt}", flush=True)
         return executor(*args, **kwargs)
 
+    new_model.remove_wrappers_with_key(comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL, "h3turbo_dbg")
     new_model.add_wrapper_with_key(
         comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL, "h3turbo_dbg", wrap)
+
+    return new_model
 
 
 class MiniMaxH3TurboLoRA:
@@ -681,6 +710,7 @@ class MiniMaxH3LoRALoader:
     )
 
     def load_lora(self, model, lora_name, strength_model=1.0, strength=None):
+        # Optional `strength` alias overrides `strength_model` when wired.
         eff_strength = strength_model if strength is None else strength
         if eff_strength == 0:
             return (model,)
@@ -715,36 +745,34 @@ class MiniMaxH3LoRALoader:
             new_model.add_patches(patch_loaded, eff_strength)
 
         manager = comfy.weight_adapter.BypassInjectionManager()
+        bias_patches = {}
         n = 0
         for key, adapter in backbone_loaded.items():
             if isinstance(adapter, comfy.weight_adapter.LoRAAdapter):
                 if key.endswith(".bias"):
-                    mod_key = key[:-5]
-                    mod = manager._get_module_by_key(new_model.model, mod_key)
-                    if mod is not None and hasattr(mod, "bias") and mod.bias is not None:
-                        try:
-                            up, down = adapter.weights[0], adapter.weights[1]
-                            b_delta = (up @ down).reshape(mod.bias.shape).to(mod.bias.device, mod.bias.dtype)
-                            mod.bias.data.add_(b_delta, alpha=eff_strength)
-                        except Exception:
-                            pass
+                    # Route bias deltas through add_patches ("diff") so ComfyUI
+                    # tracks them per-clone. Direct mod.bias.data.add_ mutates the
+                    # shared base module and leaks across workflows / re-applies.
+                    try:
+                        up, down = adapter.weights[0], adapter.weights[1]
+                        b_delta = (up @ down).reshape(-1)
+                        bias_patches[key] = ("diff", (b_delta,))
+                    except Exception:
+                        pass
                     continue
                 frugal = _FrugalLoRA(adapter.loaded_keys, adapter.weights)
                 manager.add_adapter(key, frugal, strength=eff_strength)
                 n += 1
             elif isinstance(adapter, tuple) and key.endswith(".bias"):
-                mod_key = key[:-5]
-                mod = manager._get_module_by_key(new_model.model, mod_key)
-                if mod is not None and hasattr(mod, "bias") and mod.bias is not None:
-                    try:
-                        diff_b = adapter[0]
-                        if isinstance(diff_b, torch.Tensor):
-                            mod.bias.data.add_(
-                                diff_b.reshape(mod.bias.shape).to(mod.bias.device, mod.bias.dtype),
-                                alpha=eff_strength,
-                            )
-                    except Exception:
-                        pass
+                try:
+                    diff_b = adapter[0]
+                    if isinstance(diff_b, torch.Tensor):
+                        bias_patches[key] = ("diff", (diff_b.reshape(-1),))
+                except Exception:
+                    pass
+
+        if bias_patches:
+            new_model.add_patches(bias_patches, eff_strength)
 
         injections = manager.create_injections(new_model.model)
         if manager.get_hook_count() > 0:

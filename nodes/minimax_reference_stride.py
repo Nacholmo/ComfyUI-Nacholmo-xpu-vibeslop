@@ -544,6 +544,16 @@ class MiniMaxH3ReferenceToVideoStride(io.ComfyNode):
                 if idx.shape[0] < 2:
                     idx = torch.arange(0, min(2, latent_t_full), device=z_full.device)
                 z = z_full[:, :, idx]
+                # Slicing can break the 3D-VAE temporal cycle (valid latent_t is
+                # 2+5k). Snap down to the nearest valid length so PackedLayout
+                # accepts it; preserve_duration still spreads over orig.
+                vt_sliced = int(z.shape[2])
+                vt_snapped = vt_sliced
+                while vt_snapped > 2 and (vt_snapped - 2) % 5 != 0:
+                    vt_snapped -= 1
+                if vt_snapped != vt_sliced:
+                    print(f"[MiniMaxH3-Stride] post_vae sliced latent_t {vt_sliced} -> snapped {vt_snapped} for H3 cycle", flush=True)
+                    z = z[:, :, :vt_snapped].contiguous()
                 # Qwen handling
                 if qwen_stride_mode == "full":
                     frames_qwen = frames_full
