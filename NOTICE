@@ -1,0 +1,29 @@
+ComfyUI-Nacholmo-xpu-vibeslop — Third-Party Notices
+====================================================
+
+Toolkit core and integrations: Apache-2.0 (see LICENSE).
+
+- WINT8 Suite: derived from JWLHS/ComfyUI-WINT8-XPU (MIT, Copyright (c) 2026 JWLHS).
+  See nodes/wint8/LICENSE. Ported to Linux and tuned for Intel Arc.
+
+- wint8_quarot.py: Hadamard rotation logic originally from
+  newgrit1004/ComfyUI-ZImage-Triton (MIT).
+  https://github.com/newgrit1004/ComfyUI-ZImage-Triton
+  Stripped down here to pure PyTorch (scipy optional); no upstream code
+  copied verbatim beyond the standard Hadamard construction.
+
+- Video Combine Sync: extends Kosinkadink/ComfyUI-VideoHelperSuite
+  (GPL-3.0 — kept as an external companion, not copied into this suite).
+  This suite only imports it at runtime via sys.path overlay.
+
+- MiniMax-H3 Extend interop: kat3ri/ComfyUI-MiniMax-H3-Extend (MIT, kept as
+  an external companion — no code copied).
+
+- DarkComfyX Theme: palette/userstyle ported from Dark4chanX
+  (https://uso.kkx.one/style/229613) by myi pfdll / eXoNecro, dedicated
+  under CC0-1.0 Public Domain Dedication.
+
+Palette source of truth: config/darkcomfyx_palette.json.
+web/darkcomfyx_palette.json is the served copy and must stay identical
+(diff-checked); web/js/darkcomfyx_theme.js inlines the same palette for
+registration.

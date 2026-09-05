@@ -22,11 +22,15 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
   - Seamless tiled feathered blending for large resolutions with RAM-safe memmap spillover.
   - Zero-latency compiled binary disk caching (`.cache/`).
 - **Arc Resample FPS (`ArcResampleFPS`)**:
-  - Resamples image/video batches to a target frame rate (e.g. 72fps down to 60fps) while locking exact duration and preserving audio sync.
+  - Resamples image/video batches to a target frame rate (e.g. 72fps down to 60fps) with duration-locked nearest-frame indexing.
+- **MiniMax-H3 Turbo (`MiniMaxH3TurboLoRA`, `MiniMaxH3LoRALoader`, `MiniMaxH3TurboSampler`)**:
+  - 4-step Turbo LoRA (bypass default sharp / merge low-VRAM) + 4-step sampler for `SamplerCustomAdvanced` (native `ModelSamplingAV` single-schedule or legacy dual-schedule).
+- **MiniMax-H3 Reference Stride (`MiniMaxH3ReferenceToVideoStride`)**:
+  - VRAM-saver `MiniMaxH3ReferenceToVideo` variant with uniform frame stride (`pre_vae` / `post_vae`), duration preservation, and `strided` / `full` Qwen modes.
 - **WINT8 Suite (Linux Port)** (`WINT8ModelQuantizer`, `WINT8ModelLoader`, `WINT8LoRALoader`, `WINT8LoRAStack`):
   - Pure PyTorch INT8 per-row UNet quantization and loading (50% VRAM reduction).
   - Multi-LoRA stacking (up to 5 LoRAs) baked directly onto INT8 weights.
-  - Custom XPU-accelerated GEMM kernels with Hadamard rotations (QuaRot).
+  - Per-row dequant + `F.linear` with optional native `omni_xpu_kernel.int8_linear` fast path; Hadamard rotations (QuaRot) via `wint8_quarot.py`.
   - **Linux Port Enhancements**: Auto-detects Intel oneAPI `icpx`, removes Windows BAT/.pth injection requirements, and natively supports modern Linux Triton >= 3.8 / PyTorch XPU.
 - **TorchCompile Blockwise (`TorchCompileBlockwise`)**:
   - Compiles transformer blocks individually with `torch.compile` / Inductor.
@@ -53,7 +57,7 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
   - Intercepts `torchaudio`'s C++ extension loader to gracefully handle missing CUDA runtime libraries (`libcudart.so`).
   - Enables pure PyTorch/CPU audio fallback so audio VAEs, audio nodes, and companion extensions run without fatal `libcudart` import crashes on Intel Arc / XPU systems.
 - **VRAM Guard (`xpu_vram_guard.py` / `prestartup_script.py`)**:
-  - Automatically caps the PyTorch XPU caching allocator fraction (default: `0.75` / `75%` of VRAM).
+  - Automatically caps the PyTorch XPU caching allocator fraction (`XPU_VRAM_FRACTION`, default `0.88` in `launch_xpu.sh`, `0.90` fallback in `xpu_vram_guard.py` when launched without it).
   - On Intel Level Zero drivers, exceeding physical VRAM during sudden activation spikes can hard-lock the GPU kernel and freeze the Linux desktop. VRAM Guard intercepts spikes and raises clean, recoverable Python `OutOfMemoryError`s so ComfyUI can safely unload models and recover.
 - **MiniMax-H3 Memory Override & Keyframe Auto-Rescale (`patches/minimax_h3_factor.py`)**:
   - Calibrates `MiniMaxH3.memory_usage_factor` from `0.114` to the measured `0.18` working set on Arc B580 to prevent mid-generation OOMs.
@@ -85,11 +89,11 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
   - One-click installer that registers DarkComfyX into `comfy.settings.json` and copies `user.css` into your ComfyUI user profile.
 - **`scripts/launch_xpu.sh`**:
   - Optimized driver environment flags (`SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1`, `ZE_FLAT_DEVICE_HIERARCHY=COMPOSITE`, unset `ONEAPI_DEVICE_SELECTOR`).
-  - Relaxed Level Zero single-allocation limits (`UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1`).
-  - Persistent Inductor compilation cache (`TORCHINDUCTOR_FX_GRAPH_CACHE=1`).
-  - Tuned allocator configuration (`PYTORCH_ALLOC_CONF="expandable_segments:True,garbage_collection_threshold:0.85"`).
-  - Auto-configures companion paths (`ComfyUI-AIMDO-XPU`).
-  - Default launch arguments: `--enable-triton-backend --disable-dynamic-vram --reserve-vram 5`.
+  - Relaxed Level Zero single-allocation limits (`UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1` + `UR_L0_USE_RELAXED_ALLOCATION_LIMITS=1`).
+  - Persistent Inductor compilation cache (`TORCHINDUCTOR_FX_GRAPH_CACHE=1`, `TORCHINDUCTOR_CACHE_DIR`).
+  - Dynamic-shapes default (`COMFY_TORCH_COMPILE_DYNAMIC=1`) and allocator tuning (`PYTORCH_ALLOC_CONF`).
+  - Early torchaudio guard via `scripts/bootstrap/sitecustomize.py` on `PYTHONPATH`; VRAM cap via `XPU_VRAM_FRACTION` (default `0.88`).
+  - Forwards all CLI args to `python main.py "$@"` (no forced defaults; pass e.g. `--enable-triton-backend --reserve-vram 5` yourself).
 - **`tools/convert_upscale_models.py`**:
   - CLI batch tool to convert PyTorch upscale models (`.pth` / `.safetensors`) into OpenVINO ONNX models with automated output verification.
 - **`scripts/setup.sh`**:
@@ -142,7 +146,6 @@ While this suite is fully standalone, the following companion custom nodes are r
 1. **[ComfyUI-AIMDO-XPU](https://github.com/allanmeng/ComfyUI-AIMDO-XPU)** (by Allan Meng):
    - Intel XPU replacement for `comfy-aimdo` DynamicVRAM offloading.
    - Install with: `git clone https://github.com/allanmeng/ComfyUI-AIMDO-XPU custom_nodes/ComfyUI-AIMDO-XPU`
-   - `scripts/launch_xpu.sh` automatically detects and injects it into `PYTHONPATH`.
 
 2. **[ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite)** (by Kosinkadink):
    - Required by `VideoCombineSync` for full video loading and frame sequence combining.
@@ -160,13 +163,13 @@ While this suite is fully standalone, the following companion custom nodes are r
 
 ```text
 ComfyUI-Nacholmo-xpu-vibeslop/
-├── .gitignore
+├── NOTICE                                       # Third-party attributions
 ├── LICENSE
 ├── README.md
 ├── pyproject.toml
 ├── requirements.txt
-├── sitecustomize.py                           # Early Python bootstrap hook
-├── prestartup_script.py                       # ComfyUI startup hook (activates guards)
+├── sitecustomize.py                           # Early Python bootstrap hook (path-based guard load)
+├── prestartup_script.py                       # ComfyUI startup hook (torchaudio + deferred VRAM guard)
 ├── __init__.py                                # Root custom node entry point
 │
 ├── nodes/                                     # Node Implementations
@@ -175,6 +178,10 @@ ComfyUI-Nacholmo-xpu-vibeslop/
 │   ├── torch_compile_model.py                 # LowVRAM blockwise torch.compile
 │   ├── upscale_model_video.py                 # Batched video upscaling + compile
 │   ├── video_combine_sync.py                  # Video Combine with atempo audio sync
+│   ├── minimax_turbo.py                       # MiniMax-H3 Turbo LoRA / sampler / frugal loader
+│   ├── minimax_reference_stride.py            # MiniMax-H3 Reference stride VRAM saver
+│   ├── minimax_extend_split.py                # MiniMax-H3 latent split / stitch suite
+│   ├── sol_attn_node.py                       # Sol-Attn sparse attention
 │   └── wint8/                                 # WINT8 Suite (Linux Port)
 │       ├── LICENSE                            # MIT License (JWLHS)
 │       ├── __init__.py
@@ -190,10 +197,12 @@ ComfyUI-Nacholmo-xpu-vibeslop/
 │   ├── __init__.py
 │   ├── torchaudio_guard.py                    # TorchAudio CUDA fallback patch
 │   ├── xpu_vram_guard.py                      # VRAM allocator guard
-│   └── minimax_h3_factor.py                   # MiniMax H3 memory factor calibration
+│   ├── minimax_h3_factor.py                   # MiniMax H3 memory factor + keyframe rescale
+│   └── minimax_upscaler_xpu.py                # MiniMax H3 latent upscaler XPU patch
 │
 ├── tools/                                     # CLI Utilities
 │   ├── convert_upscale_models.py              # PyTorch to OpenVINO ONNX model converter
+│   ├── arc_openvino_worker.py                 # Isolated OpenVINO worker (managed by Arc node)
 │   └── install_theme.py                       # DarkComfyX theme installer & configurator
 │
 ├── web/                                       # Web Frontend Extensions
@@ -201,15 +210,19 @@ ComfyUI-Nacholmo-xpu-vibeslop/
 │   │   └── darkcomfyx_theme.js                # Extension logic, settings & greentext
 │   ├── css/
 │   │   └── darkcomfyx.css                     # Complete DarkComfyX stylesheet
-│   └── darkcomfyx_palette.json                # Standalone ComfyUI palette JSON
+│   └── darkcomfyx_palette.json                # Served palette copy (source: config/)
 │
 ├── scripts/                                   # Launch & Setup Automation
 │   ├── launch_xpu.sh                          # Production Intel Arc B580 launcher
-│   └── setup.sh                               # One-command installer & restorer
+│   ├── setup.sh                               # One-command installer & restorer
+│   └── bootstrap/
+│       └── sitecustomize.py                   # Early guard injected via PYTHONPATH
+│
+├── workflows/                                 # Example MiniMax-H3 Ref2Vid Turbo XPU workflows
 │
 └── config/                                    # Configurations & Theme Presets
     ├── extra_model_paths.yaml.example         # External storage preset template
-    ├── darkcomfyx_palette.json                # Standalone palette export
+    ├── darkcomfyx_palette.json                # Palette source of truth
     └── darkcomfyx.user.css                    # Standalone user.css drop-in
 ```
 
@@ -237,5 +250,6 @@ python custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/tools/convert_upscale_models.p
 - **Toolkit Core & Integrations**: Licensed under Apache-2.0.
 - **DarkComfyX Theme**: Color palette and userstyle design inspired by & ported from [Dark4chanX](https://uso.kkx.one/style/229613) by myi pfdll / eXoNecro, dedicated under the **Creative Commons Zero v1.0 Universal (CC0-1.0)** Public Domain Dedication.
 - **WINT8 Suite**: Derived from [JWLHS/ComfyUI-WINT8-XPU](https://github.com/JWLHS/ComfyUI-WINT8-XPU) under the **MIT License** (Copyright (c) 2026 JWLHS), ported to Linux and tuned for Intel Arc B580.
-- **Video Combine Sync**: Extends [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) with duration-matching atempo audio filter chaining.
+- **WINT8 QuaRot**: Hadamard rotation logic originally from [newgrit1004/ComfyUI-ZImage-Triton](https://github.com/newgrit1004/ComfyUI-ZImage-Triton) (MIT). See `NOTICE`.
+- **Video Combine Sync**: Extends [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) with duration-matching atempo audio filter chaining (kept as external companion, not copied).
 - **MiniMax-H3 Extend Split & Stitching Suite**: Interoperates with [ComfyUI-MiniMax-H3-Extend](https://github.com/kat3ri/ComfyUI-MiniMax-H3-Extend) by kat3ri (external companion, no code copied) for `context_latent` video continuation.
