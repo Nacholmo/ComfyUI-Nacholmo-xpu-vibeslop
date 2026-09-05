@@ -146,6 +146,10 @@ class VideoConcatExtend:
                     "default": 48, "min": 1, "max": 4096, "step": 1,
                     "tooltip": "Upper bound for auto-detected overlap (~2s at 24fps).",
                 }),
+                "video_blend_frames": ("INT", {
+                    "default": 4, "min": 0, "max": 64, "step": 1,
+                    "tooltip": "Linear dissolve across the joint (frames). Hides residual pops from pose/re-lighting jumps. 0 = hard cut.",
+                }),
             },
         }
 
@@ -157,7 +161,7 @@ class VideoConcatExtend:
     def concat(self, before_images, before_audio, after_images, after_audio,
                overlap_frames=24, fps=24.0, color_match=True, color_strength=1.0,
                color_ref_frames=8, audio_crossfade_seconds=0.1,
-               auto_overlap=True, max_overlap_frames=48):
+               auto_overlap=True, max_overlap_frames=48, video_blend_frames=4):
         if before_images.shape[1:] != after_images.shape[1:]:
             raise ValueError(
                 f"VideoConcatExtend: frame shape mismatch {tuple(before_images.shape)} vs "
@@ -192,6 +196,17 @@ class VideoConcatExtend:
             log.info("[VideoConcatExtend] Applied color transfer to continuation")
 
         out_images = torch.cat([before_images, after_t], dim=0)
+        nb = int(video_blend_frames)
+        if nb > 1 and out_images.shape[0] > nb:
+            n_before = before_images.shape[0]
+            # linear dissolve across nb joint frames (before-tail -> after-head)
+            ramp = torch.linspace(0.0, 1.0, nb, device=out_images.device, dtype=torch.float32)
+            ramp = ramp.view(nb, 1, 1, 1)  # IMAGE is [N,H,W,C]
+            joint = out_images[n_before - nb:n_before].float() * (1.0 - ramp) + \
+                out_images[n_before:n_before + nb].float() * ramp
+            out_images = out_images.clone()
+            out_images[n_before - nb:n_before] = joint.to(out_images.dtype)
+            log.info(f"[VideoConcatExtend] Blended {nb} joint frames")
 
         # --- audio ---
         w1 = before_audio["waveform"]
