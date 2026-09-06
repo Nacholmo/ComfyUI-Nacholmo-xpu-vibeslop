@@ -572,10 +572,13 @@ class ApplySolAttn:
 
 NODE_CLASS_MAPPINGS = {
     "ApplySolAttn": ApplySolAttn,
-    "SolAttnPatch": ApplySolAttn,
+    # Alias renamed from "SolAttnPatch": the official ComfyUI-SolAttn (XPU)
+    # custom node now provides "SolAttnPatch" and loads after this suite,
+    # which would silently shadow this alias with a different schema.
+    "SolAttnPatchMiniMax": ApplySolAttn,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ApplySolAttn": "Apply Sol-Attn Sparse Attention (Intel Arc XPU)",
-    "SolAttnPatch": "Patch Sol-Attn (MiniMax)",
+    "SolAttnPatchMiniMax": "Patch Sol-Attn (MiniMax)",
 }

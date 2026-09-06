@@ -18,14 +18,19 @@ TORCH_INDEX="https://download.pytorch.org/whl/nightly/xpu"
 # Local wheel source (torch215 bmg builds). Falls back to $HOME/llm-scaler.
 WHEELS_DIR="${WHEELS_DIR:-/home/sundae/llm-scaler/wheels}"
 
+# Omni XPU custom-node pins (intel/llm-scaler omni 0.2.0-b2 image contract).
+# nunchaku needs --ignore-requires-python on Python 3.14 (declares <3.14).
+OMNI_NODES_PATCH="/home/sundae/Drives/Fenix/Comfy-omni/llm-scaler/omni/patches/comfyui_controlnet_aux_depth_anything_v2_xpu.patch"
+
 usage() {
-    echo "Usage: setup.sh [--with-aimdo] [--with-vhs] [--with-minimax-extend] [--all] [--fresh-venv] [--with-omni] [--help]"
+    echo "Usage: setup.sh [--with-aimdo] [--with-vhs] [--with-minimax-extend] [--all] [--fresh-venv] [--with-omni] [--with-omni-nodes] [--help]"
     echo "  --with-aimdo           Clone ComfyUI-AIMDO-XPU companion"
     echo "  --with-vhs             Clone comfyui-videohelpersuite + deps"
     echo "  --with-minimax-extend  Clone ComfyUI-MiniMax-H3-Extend companion"
     echo "  --all                  All of the above"
     echo "  --fresh-venv           Snapshot + rename venv, rebuild from torch pin + local Omni wheels"
     echo "  --with-omni            Verify OmniXPU stack (kernel probe, Kitchen XPU backend, AIMDO)"
+    echo "  --with-omni-nodes      Clone Omni XPU nodes at pinned commits (nunchaku/SolAttn/easy-use/CacheDiT/controlnet_aux+XPU patch)"
 }
 
 # Parse arguments
@@ -34,6 +39,7 @@ WITH_VHS=0
 WITH_MINIMAX_EXTEND=0
 FRESH_VENV=0
 WITH_OMNI=0
+WITH_OMNI_NODES=0
 for arg in "$@"; do
     case $arg in
         --with-aimdo)
@@ -55,6 +61,9 @@ for arg in "$@"; do
             ;;
         --with-omni)
             WITH_OMNI=1
+            ;;
+        --with-omni-nodes)
+            WITH_OMNI_NODES=1
             ;;
         --help|-h)
             usage
@@ -198,6 +207,49 @@ if [ -n "$COMFY_ROOT" ]; then
         if ! git clone https://github.com/kat3ri/ComfyUI-MiniMax-H3-Extend "$COMFY_ROOT/custom_nodes/ComfyUI-MiniMax-H3-Extend"; then
             echo "[!] Warning: failed to clone ComfyUI-MiniMax-H3-Extend." >&2
         fi
+    fi
+
+    # 4b. Omni XPU nodes at pinned commits (+ DepthAnythingV2 XPU patch).
+    if [ "$WITH_OMNI_NODES" -eq 1 ]; then
+        _omni_clone() { # $1=repo $2=dir $3=commit
+            if [ -d "$COMFY_ROOT/custom_nodes/$2" ]; then
+                echo "[*] $2 already present; leaving untouched."
+                return 0
+            fi
+            echo "[+] Cloning $2 @ $3 ..."
+            git clone --filter=blob:none --no-checkout "$1" "$COMFY_ROOT/custom_nodes/$2" \
+                && git -C "$COMFY_ROOT/custom_nodes/$2" fetch --depth 1 origin "$3" \
+                && git -C "$COMFY_ROOT/custom_nodes/$2" checkout --detach FETCH_HEAD
+        }
+        _omni_clone https://github.com/xiangyuT/ComfyUI-nunchaku-XPU.git ComfyUI-nunchaku-XPU cc0f6236b6c329178ad4ef58452a874e774c7b8e
+        _omni_clone https://github.com/xiangyuT/ComfyUI-SolAttn_xpu.git ComfyUI-SolAttn 5f1c4aac3ca32a00b0b4c15ddbb7cb53fa43344d
+        _omni_clone https://github.com/yolain/ComfyUI-Easy-Use.git comfyui-easy-use b5e31ef12ad9d0b187b545c2707735cc7d581c52
+        _omni_clone https://github.com/Jasonzzt/ComfyUI-CacheDiT.git ComfyUI-CacheDiT 1d92bbd86ec59aa6223fe2368849b7413a1acb93
+        _omni_clone https://github.com/Fannovel16/comfyui_controlnet_aux.git comfyui_controlnet_aux e8b689a513c3e6b63edc44066560ca5919c0576e
+        if [ -f "$OMNI_NODES_PATCH" ] && [ -d "$COMFY_ROOT/custom_nodes/comfyui_controlnet_aux" ]; then
+            if git -C "$COMFY_ROOT/custom_nodes/comfyui_controlnet_aux" status --short | grep -q "depth_anything_v2/dpt.py"; then
+                echo "[*] controlnet_aux XPU patch already applied."
+            elif git -C "$COMFY_ROOT/custom_nodes/comfyui_controlnet_aux" apply "$OMNI_NODES_PATCH"; then
+                echo "[+] Applied DepthAnythingV2 XPU patch to controlnet_aux."
+            else
+                echo "[!] Warning: controlnet_aux XPU patch failed to apply." >&2
+            fi
+        fi
+        for _nd in ComfyUI-nunchaku-XPU comfyui-easy-use ComfyUI-CacheDiT comfyui_controlnet_aux; do
+            if [ -f "$COMFY_ROOT/custom_nodes/$_nd/requirements.txt" ]; then
+                pip install -r "$COMFY_ROOT/custom_nodes/$_nd/requirements.txt" \
+                    || echo "[!] Warning: $_nd requirements failed." >&2
+            fi
+        done
+        # nunchaku_torch runtime: same checkout as one distribution (XPU).
+        # --ignore-requires-python: declares <3.14, verified working on 3.14.
+        if [ -d "$COMFY_ROOT/custom_nodes/ComfyUI-nunchaku-XPU" ]; then
+            pip install --no-deps --no-build-isolation --ignore-requires-python \
+                "$COMFY_ROOT/custom_nodes/ComfyUI-nunchaku-XPU" \
+                || echo "[!] Warning: nunchaku dist install failed." >&2
+        fi
+        unset -f _omni_clone
+        unset _nd
     fi
 fi
 
