@@ -5,18 +5,35 @@ echo "======================================================="
 echo "   ComfyUI Nacholmo XPU Vibeslop - Setup & Restore     "
 echo "======================================================="
 
+# Omni-aligned torch nightly pin.
+# The local omni_xpu_kernel + provider wheels are hash-pinned to an EXACT
+# torch build (provider manifest runtime.torch_version). If nightly moves
+# past this pin, OmniXPU rejects both providers (see boot log "runtime
+# provider rejected ... does not match provider") and Kitchen-XPU/AIMDO go
+# silent — attention/norm adapters still apply, but no XPU dispatch or VBAR.
+# After any torch upgrade, re-run with --with-omni to verify the match.
+TORCH_PIN="2.15.0.dev20260830"
+TORCHVISION_PIN="0.30.0.dev20260831"
+TORCH_INDEX="https://download.pytorch.org/whl/nightly/xpu"
+# Local wheel source (torch215 bmg builds). Falls back to $HOME/llm-scaler.
+WHEELS_DIR="${WHEELS_DIR:-/home/sundae/llm-scaler/wheels}"
+
 usage() {
-    echo "Usage: setup.sh [--with-aimdo] [--with-vhs] [--with-minimax-extend] [--all] [--help]"
+    echo "Usage: setup.sh [--with-aimdo] [--with-vhs] [--with-minimax-extend] [--all] [--fresh-venv] [--with-omni] [--help]"
     echo "  --with-aimdo           Clone ComfyUI-AIMDO-XPU companion"
     echo "  --with-vhs             Clone comfyui-videohelpersuite + deps"
     echo "  --with-minimax-extend  Clone ComfyUI-MiniMax-H3-Extend companion"
     echo "  --all                  All of the above"
+    echo "  --fresh-venv           Snapshot + rename venv, rebuild from torch pin + local Omni wheels"
+    echo "  --with-omni            Verify OmniXPU stack (kernel probe, Kitchen XPU backend, AIMDO)"
 }
 
 # Parse arguments
 WITH_AIMDO=0
 WITH_VHS=0
 WITH_MINIMAX_EXTEND=0
+FRESH_VENV=0
+WITH_OMNI=0
 for arg in "$@"; do
     case $arg in
         --with-aimdo)
@@ -32,6 +49,12 @@ for arg in "$@"; do
             WITH_AIMDO=1
             WITH_VHS=1
             WITH_MINIMAX_EXTEND=1
+            ;;
+        --fresh-venv)
+            FRESH_VENV=1
+            ;;
+        --with-omni)
+            WITH_OMNI=1
             ;;
         --help|-h)
             usage
@@ -71,7 +94,43 @@ else
 fi
 
 # Activate virtual environment if present
-if [ -d "venv" ]; then
+if [ "$FRESH_VENV" -eq 1 ]; then
+    echo "[+] Rebuilding fresh venv (torch pin $TORCH_PIN)..."
+    STAMP="$(date +%Y%m%d)"
+    if [ -d "venv" ]; then
+        venv/bin/pip freeze > "$SUITE_DIR/manifests/aurora-venv-freeze-$STAMP.txt" 2>/dev/null || true
+        echo "[+] Snapshot saved to manifests/aurora-venv-freeze-$STAMP.txt"
+        mv venv "venv.bak-$STAMP"
+        echo "[+] Old venv renamed to venv.bak-$STAMP (delete after validation)"
+    fi
+    /usr/bin/python3.14 -m venv venv
+    # shellcheck disable=SC1091
+    source venv/bin/activate
+    echo "[+] Installing torch nightly pin + XPU deps..."
+    pip install --pre --upgrade torch torchaudio torchvision triton-xpu --extra-index-url "$TORCH_INDEX"
+    pip install "torch==$TORCH_PIN" "torchvision==$TORCHVISION_PIN" --extra-index-url "$TORCH_INDEX"
+    if [ -n "${COMFY_ROOT:-}" ] && [ -f "$COMFY_ROOT/requirements.txt" ]; then
+        echo "[+] Installing ComfyUI requirements..."
+        pip install -r "$COMFY_ROOT/requirements.txt" || echo "[!] Warning: ComfyUI requirements failed." >&2
+    fi
+    if [ -f "$SUITE_DIR/manifests/companion-pins.txt" ]; then
+        echo "[+] Installing companion custom-node dependency pins..."
+        pip install -r "$SUITE_DIR/manifests/companion-pins.txt" || echo "[!] Warning: companion pins failed." >&2
+    fi
+    # Local wheels LAST so vendored provider files win over PyPI copies.
+    if [ -d "$WHEELS_DIR" ]; then
+        echo "[+] Installing local Omni wheels from $WHEELS_DIR ..."
+        pip install --no-deps \
+            "$WHEELS_DIR/kitchen-source"/comfy_kitchen-*.whl \
+            "$WHEELS_DIR/kitchen-provider"/comfy_kitchen_xpu_runtime-*.whl \
+            "$WHEELS_DIR/aimdo-source"/comfy_aimdo-*.whl \
+            "$WHEELS_DIR/aimdo-provider"/comfy_aimdo_xpu_runtime-*.whl \
+            "$WHEELS_DIR"/omni_xpu_kernel-*torch215*.whl
+        pip install "onednn==2026.0.0"
+    else
+        echo "[!] Warning: WHEELS_DIR not found ($WHEELS_DIR); skipping Omni wheels." >&2
+    fi
+elif [ -d "venv" ]; then
     echo "[+] Activating venv/..."
     source venv/bin/activate
 elif [ -d ".venv" ]; then
@@ -142,7 +201,45 @@ if [ -n "$COMFY_ROOT" ]; then
     fi
 fi
 
-# 4. Environment verification
+# 5. OmniXPU stack verification
+if [ "$WITH_OMNI" -eq 1 ]; then
+    echo ""
+    echo "--- OmniXPU Check ---"
+    python - <<'PYEOF' || echo "[!] OmniXPU check failed (see errors above)."
+import importlib.util
+import sys
+
+sys.argv = ['main.py']  # direct mode: Kitchen expected active, AIMDO skipped
+
+spec = importlib.util.spec_from_file_location(
+    '_omnixpu_bootstrap', 'custom_nodes/ComfyUI-OmniXPU/runtime_bootstrap.py')
+mod = importlib.util.module_from_spec(spec)
+sys.modules['_omnixpu_bootstrap'] = mod
+spec.loader.exec_module(mod)
+state = mod.bootstrap()
+print('provider bootstrap:', state['status'], '(mode ' + str(state['mode']) + ')')
+for pid, ps in state['providers'].items():
+    print(' ', pid, '->', ps['status'], ps['reason'])
+kitchen = state['providers'].get('comfy_kitchen.xpu', {})
+if kitchen.get('status') != 'active':
+    print('[!] Kitchen XPU provider not active: XPU dispatch disabled.')
+    print('    Likely cause: torch build drifted past the wheel pin')
+    print('    (see TORCH_PIN at top of setup.sh); rebuild with --fresh-venv.')
+
+import comfy_kitchen as ck
+xpu = ck.list_backends().get('xpu') or {}
+print('kitchen xpu backend available:', xpu.get('available'),
+      '| caps:', len(xpu.get('capabilities', [])))
+
+pspec = importlib.util.spec_from_file_location(
+    '_omnixpu_probe', 'custom_nodes/ComfyUI-OmniXPU/probe.py')
+probe = importlib.util.module_from_spec(pspec)
+sys.modules['_omnixpu_probe'] = probe
+pspec.loader.exec_module(probe)
+probe.probe()
+print('kernel summary:', probe.summary())
+PYEOF
+fi
 echo ""
 echo "--- Environment Check ---"
 python -c "

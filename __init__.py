@@ -6,13 +6,14 @@ Unified enhancement and performance toolkit for Intel Arc GPUs & PyTorch XPU.
 Included custom nodes:
   - ArcSuperResolution         → OpenVINO XMX-accelerated AI Super Resolution for images & video
   - ArcResampleFPS             → Duration-locked audio-synced video frame rate resampler
-  - TorchCompileBlockwise      → LowVRAM-safe blockwise Dynamo/Inductor compilation
   - UpscaleVideoWithModel      → Batched video frame upscaler with torch.compile acceleration
   - VideoCombineSync           → Video combine node with pitch-preserving atempo audio sync
-  - WINT8ModelQuantizer        → UNet BF16/FP16/FP8 to INT8 quantizer
-  - WINT8ModelLoader           → INT8 UNet loader with fast XPU kernels
-  - WINT8LoRALoader            → Standalone INT8 LoRA loader
-  - WINT8LoRAStack             → Multi-LoRA stack for INT8 models (up to 5)
+  - MiniMax-H3 Turbo/Stride/Extend → Turbo LoRA + sampler, stride ref-to-video, extend-split
+  - ApplySolAttn               → Sparse block attention opt-in (OmniXPU CUTE dense is default)
+
+Deprecated (opt-in via env, superseded by OmniXPU/Kitchen):
+  - TorchCompileBlockwise      → NACHOLMO_TORCHCOMPILE=1 (use OmniXPU CUTE instead)
+  - WINT8 quantizer/loader/LoRA → NACHOLMO_WINT8=1 (use Kitchen GGUF/SVDQuant + OmniXPU INT8/FP8)
 
 Runtime enhancements:
   - VRAM Guard (auto-caps XPU allocator to avoid driver lockups on Level Zero)

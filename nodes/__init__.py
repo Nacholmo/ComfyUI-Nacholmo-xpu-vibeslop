@@ -1,6 +1,7 @@
 """Unified node exporter for Intel Arc & XPU ComfyUI Toolkit."""
 
 import logging
+import os
 
 log = logging.getLogger("ComfyUI-Nacholmo-xpu-vibeslop")
 
@@ -18,16 +19,22 @@ try:
 except Exception as e:
     log.warning(f"[Intel-Arc-Suite] Could not load Arc OpenVINO nodes: {e}")
 
-# 2. TorchCompile Blockwise (LowVRAM-Safe)
-try:
-    from .torch_compile_model import (
-        NODE_CLASS_MAPPINGS as _COMPILE_CLASS_MAPPINGS,
-        NODE_DISPLAY_NAME_MAPPINGS as _COMPILE_DISPLAY_NAME_MAPPINGS,
-    )
-    NODE_CLASS_MAPPINGS.update(_COMPILE_CLASS_MAPPINGS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(_COMPILE_DISPLAY_NAME_MAPPINGS)
-except Exception as e:
-    log.warning(f"[Intel-Arc-Suite] Could not load TorchCompile node: {e}")
+# 2. TorchCompile Blockwise (LowVRAM-Safe) — DEPRECATED, opt-in only.
+# Omni's CUTE fused attention is the default compile path now, and this
+# module's import-time torch._dynamo.disable patches on comfy.ops fight
+# Kitchen/Omni dispatch. Set NACHOLMO_TORCHCOMPILE=1 to re-enable.
+if os.environ.get("NACHOLMO_TORCHCOMPILE", "0") != "0":
+    try:
+        from .torch_compile_model import (
+            NODE_CLASS_MAPPINGS as _COMPILE_CLASS_MAPPINGS,
+            NODE_DISPLAY_NAME_MAPPINGS as _COMPILE_DISPLAY_NAME_MAPPINGS,
+        )
+        NODE_CLASS_MAPPINGS.update(_COMPILE_CLASS_MAPPINGS)
+        NODE_DISPLAY_NAME_MAPPINGS.update(_COMPILE_DISPLAY_NAME_MAPPINGS)
+    except Exception as e:
+        log.warning(f"[Intel-Arc-Suite] Could not load TorchCompile node: {e}")
+else:
+    log.info("[Intel-Arc-Suite] TorchCompileBlockwise disabled (deprecated: use OmniXPU CUTE attention; opt in with NACHOLMO_TORCHCOMPILE=1)")
 
 # 3. Upscale Video With Model
 try:
@@ -51,16 +58,23 @@ try:
 except Exception as e:
     log.warning(f"[Intel-Arc-Suite] Could not load VideoCombineSync node: {e}")
 
-# 5. WINT8 Suite (Quantizer, Loader, LoRA Loader, LoRA Stack)
-try:
-    from .wint8 import (
-        NODE_CLASS_MAPPINGS as _WINT8_CLASS_MAPPINGS,
-        NODE_DISPLAY_NAME_MAPPINGS as _WINT8_DISPLAY_NAME_MAPPINGS,
-    )
-    NODE_CLASS_MAPPINGS.update(_WINT8_CLASS_MAPPINGS)
-    NODE_DISPLAY_NAME_MAPPINGS.update(_WINT8_DISPLAY_NAME_MAPPINGS)
-except Exception as e:
-    log.warning(f"[Intel-Arc-Suite] Could not load WINT8 suite: {e}")
+# 5. WINT8 Suite (Quantizer, Loader, LoRA Loader, LoRA Stack) — DEPRECATED, opt-in only.
+# Kitchen XPU (GGUF/SVDQuant/FP8/INT8 via GGUF-XPU + nunchaku-XPU companions)
+# plus OmniXPU INT8-FFN/FP8 adapters supersede this path, and wint8_xpu_ops'
+# import-time torch dtype + inductor patches fight Kitchen dispatch.
+# Set NACHOLMO_WINT8=1 to re-enable for legacy workflows.
+if os.environ.get("NACHOLMO_WINT8", "0") != "0":
+    try:
+        from .wint8 import (
+            NODE_CLASS_MAPPINGS as _WINT8_CLASS_MAPPINGS,
+            NODE_DISPLAY_NAME_MAPPINGS as _WINT8_DISPLAY_NAME_MAPPINGS,
+        )
+        NODE_CLASS_MAPPINGS.update(_WINT8_CLASS_MAPPINGS)
+        NODE_DISPLAY_NAME_MAPPINGS.update(_WINT8_DISPLAY_NAME_MAPPINGS)
+    except Exception as e:
+        log.warning(f"[Intel-Arc-Suite] Could not load WINT8 suite: {e}")
+else:
+    log.info("[Intel-Arc-Suite] WINT8 suite disabled (deprecated: use Kitchen GGUF/SVDQuant + OmniXPU INT8/FP8; opt in with NACHOLMO_WINT8=1)")
 
 # 6. MiniMax-H3 Turbo (Turbo LoRA & 4-Step Sampler)
 try:
