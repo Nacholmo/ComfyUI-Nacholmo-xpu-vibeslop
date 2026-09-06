@@ -92,7 +92,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
             [ -z "$_d" ] && continue
             _h="$(_hold_for "$_d")"
             if [ -d "$COMFY_ROOT/custom_nodes/$_d" ]; then
-                if [ -d "$COMFY_ROOT/custom_nodes/$_d/.git" ]; then
+                if [ -e "$COMFY_ROOT/custom_nodes/$_d/.git" ]; then
                     echo "      $_d @ $(git -C "$COMFY_ROOT/custom_nodes/$_d" rev-parse --short HEAD 2>/dev/null || echo missing) -> origin HEAD $([ -n "$_h" ] && echo "(HELD at $_h)")"
                 else
                     echo "      $_d (no-git checkout, will skip)"
@@ -134,7 +134,7 @@ git rev-parse HEAD > "$SNAP_DIR/comfy-core.txt" 2>/dev/null || echo unknown > "$
 : > "$SNAP_DIR/nodes.txt"
 for _d in "$COMFY_ROOT"/custom_nodes/*/; do
     _n="$(basename "$_d")"
-    if [ -d "$_d/.git" ]; then
+    if [ -e "$_d/.git" ]; then
         echo "$_n $(git -C "$_d" rev-parse HEAD 2>/dev/null || echo unknown)" >> "$SNAP_DIR/nodes.txt"
     else
         echo "$_n (no-git)" >> "$SNAP_DIR/nodes.txt"
@@ -148,7 +148,7 @@ rollback() { # $1=reason
     rm -rf venv
     mv "venv.pre-roll-$STAMP" venv
     while read -r _n _c; do
-        if [ -d "custom_nodes/$_n/.git" ] && [ "$_c" != "(no-git)" ] && [ "$_c" != "unknown" ]; then
+        if [ -e "custom_nodes/$_n/.git" ] && [ "$_c" != "(no-git)" ] && [ "$_c" != "unknown" ]; then
             git -C "custom_nodes/$_n" checkout --detach "$_c" 2>/dev/null || true
         fi
     done < "$SNAP_DIR/nodes.txt"
@@ -208,12 +208,14 @@ if [ "$SKIP_TORCH" -eq 0 ]; then
     unset _kernel
 fi
 
-# --- Root + official packages (floating) ---
+# --- Root packages (official kitchen/aimdo HELD by requirements.txt) ---
+# Official comfy-kitchen/comfy-aimdo must move in lockstep with the provider
+# SOURCES (provider manifest compatible_versions). Floating them alone
+# (pip install -U) gets both providers rejected -> RED. They advance only
+# via a manual provider-source rebuild (see docs/rolling-release.md §3),
+# so here they are intentionally re-pinned by requirements.txt, never -U'd.
 echo "[roll] installing ComfyUI requirements ..."
 pip install -r requirements.txt || rollback "ComfyUI requirements failed"
-if [ "$SKIP_TORCH" -eq 0 ]; then
-    pip install -U comfy-kitchen comfy-aimdo || rollback "official kitchen/aimdo float failed"
-fi
 pip install -r "$SUITE_DIR/requirements.txt" || rollback "suite requirements failed"
 if [ -f "$SUITE_DIR/manifests/companion-pins.txt" ]; then
     # Pins file doubles as the companion package list; versions float on rolls.
@@ -245,7 +247,7 @@ if [ "$SKIP_NODES" -eq 0 ]; then
             echo "[roll] skip $_d (not installed)"
             continue
         fi
-        if [ ! -d "$COMFY_ROOT/custom_nodes/$_d/.git" ]; then
+        if [ ! -d "$COMFY_ROOT/custom_nodes/$_d/.git" ] && [ ! -f "$COMFY_ROOT/custom_nodes/$_d/.git" ]; then
             echo "[roll] skip $_d (no-git checkout, cannot float safely)"
             continue
         fi

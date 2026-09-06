@@ -37,7 +37,7 @@ Everything else floats freely; pip resolves companion deps unpinned.
 | 0 | Snapshot | `pip freeze` + all node commits → `manifests/roll-snapshots/<date>/`; `venv` → `venv.pre-roll-<date>` (instant `mv`) | rollback source |
 | 1 | Torch nightly | `pip install --pre -U torch torchaudio torchvision triton-xpu` (nightly index, **no pin**) | full rollback |
 | 2 | Providers | Re-stamp provider wheels for the new torch via `build_wheel.py` from existing source wheels (`--source-wheel/--source-revision/--torch-version/--xpu-target bmg`), install `--no-deps`; kernel wheel reused `--no-deps` (no kernel rebuild — see §4) | full rollback |
-| 3 | Official kitchen/aimdo | `pip install -U comfy-kitchen comfy-aimdo` (PyPI float; provider `compatible_versions` check decides) | full rollback |
+| 3 | Official kitchen/aimdo | **HELD** — re-pinned by root `requirements.txt`, never `-U`'d (see §3) | advance only with provider sources (manual) |
 | 4 | ComfyUI core | `git fetch origin` + checkout `origin/HEAD` | `roll-holds.conf`: `comfy-core=<commit>` |
 | 5 | Custom nodes | Same float per dir in `FLOAT_NODES`; controlnet_aux patch re-applied, hold-on-reject | `roll-holds.conf`: `<dirname>=<commit>` |
 | 6 | Requirements | Root `requirements.txt` + each floated node's `requirements.txt` (unpinned) + nunchaku dist rebuild | full rollback |
@@ -52,6 +52,14 @@ comfyui_controlnet_aux=e8b689a513c3e6b63edc44066560ca5919c0576e
 ```
 
 ## 3. Provider rebuild details
+
+Official `comfy-kitchen`/`comfy-aimdo` (PyPI) and the XPU provider wheels
+form a lockstep triple with the provider *sources*: the provider manifest
+pins both `compatible_versions` (official) and `torch_version`. Floating the
+official packages alone gets both providers rejected (`official ... is
+incompatible; provider accepts [...]`) — observed on the first live roll
+(official 0.2.33/0.5.2 vs accepted 0.2.31/0.4.15). So `roll.sh` never `-U`s
+them; they advance only together with a manual provider-source rebuild:
 
 Sources live outside this repo (Intel llm-scaler checkout):
 

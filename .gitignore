@@ -43,3 +43,6 @@ testimage.jpg
 .opencode/
 papers/
 *.pdf
+
+# Per-roll evidence (freezes, node commits) — history, not source
+manifests/roll-snapshots/
