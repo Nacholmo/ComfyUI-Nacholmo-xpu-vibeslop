@@ -131,11 +131,12 @@ else
     exit 1
 fi
 git rev-parse HEAD > "$SNAP_DIR/comfy-core.txt" 2>/dev/null || echo unknown > "$SNAP_DIR/comfy-core.txt"
+git branch --show-current > "$SNAP_DIR/comfy-core-branch.txt" 2>/dev/null || echo DETACHED > "$SNAP_DIR/comfy-core-branch.txt"
 : > "$SNAP_DIR/nodes.txt"
 for _d in "$COMFY_ROOT"/custom_nodes/*/; do
     _n="$(basename "$_d")"
     if [ -e "$_d/.git" ]; then
-        echo "$_n $(git -C "$_d" rev-parse HEAD 2>/dev/null || echo unknown)" >> "$SNAP_DIR/nodes.txt"
+        echo "$_n $(git -C "$_d" rev-parse HEAD 2>/dev/null || echo unknown) $(git -C "$_d" branch --show-current 2>/dev/null || echo DETACHED)" >> "$SNAP_DIR/nodes.txt"
     else
         echo "$_n (no-git)" >> "$SNAP_DIR/nodes.txt"
     fi
@@ -147,16 +148,34 @@ rollback() { # $1=reason
     echo "[roll] ROLLBACK: $1" >&2
     rm -rf venv
     mv "venv.pre-roll-$STAMP" venv
-    while read -r _n _c; do
+    while read -r _n _c _b; do
+        # Never touch the suite repo itself: roll.sh modifies none of its
+        # tracked files (only untracked snapshots/), and detaching it
+        # strands the working checkout (observed on the first RED roll).
+        if [ "$_n" = "ComfyUI-Nacholmo-xpu-vibeslop" ]; then
+            continue
+        fi
         if [ -e "custom_nodes/$_n/.git" ] && [ "$_c" != "(no-git)" ] && [ "$_c" != "unknown" ]; then
             git -C "custom_nodes/$_n" checkout --detach "$_c" 2>/dev/null || true
+            # Reattach the recorded branch when it still points at the
+            # snapshot commit (same-commit checkout: working tree untouched,
+            # local mods like GGUF-XPU loader.py survive).
+            if [ -n "${_b:-}" ] && [ "$_b" != "DETACHED" ] \
+                && [ "$(git -C "custom_nodes/$_n" rev-parse "$_b" 2>/dev/null)" = "$_c" ]; then
+                git -C "custom_nodes/$_n" checkout "$_b" 2>/dev/null || true
+            fi
         fi
     done < "$SNAP_DIR/nodes.txt"
     _core="$(cat "$SNAP_DIR/comfy-core.txt")"
+    _core_branch="$(cat "$SNAP_DIR/comfy-core-branch.txt" 2>/dev/null || echo DETACHED)"
     if [ "$_core" != "unknown" ]; then
         git checkout --detach "$_core" 2>/dev/null || true
+        if [ "$_core_branch" != "DETACHED" ] && [ "$_core_branch" != "" ] \
+            && [ "$(git rev-parse "$_core_branch" 2>/dev/null)" = "$_core" ]; then
+            git checkout "$_core_branch" 2>/dev/null || true
+        fi
     fi
-    unset _n _c _core
+    unset _n _c _b _core _core_branch
     echo "[roll] Restored venv + node commits from $SNAP_DIR" >&2
     exit 3
 }
