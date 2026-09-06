@@ -137,6 +137,14 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
    ./launch_xpu.sh --enable-triton-backend --reserve-vram 5
    ```
 
+### Rolling Release
+
+This setup floats: latest torch nightly, ComfyUI core, and custom nodes.
+Roll everything forward with `./custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/scripts/roll.sh`
+(`--dry-run` to preview) — it snapshots, rebuilds provider wheels, runs the
+verify gate, and rolls back automatically on failure. Details, constraints,
+and the recovery runbook: `docs/rolling-release.md`.
+
 ---
 
 ## Recommended Companion Custom Nodes

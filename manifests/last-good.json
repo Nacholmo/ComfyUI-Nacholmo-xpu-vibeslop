@@ -1,0 +1,29 @@
+{
+  "aimdo": "0.4.15",
+  "comfyui_core": "567275141678c9fd65bafef6aa9dcb4ac9bd70e3",
+  "date": "20260906-baseline",
+  "kernel": "0.2.0b2+torch215.bmg",
+  "kitchen": "0.2.31",
+  "nodes": {
+    "ComfyUI-AIMDO-XPU": "92d11c477575d45cad81c73f5cbad3a801a035da",
+    "ComfyUI-CacheDiT": "1d92bbd86ec59aa6223fe2368849b7413a1acb93",
+    "ComfyUI-Flux2Klein-Enhancer": "6804643bff9a20926106427ff08d5b1bd2e49861",
+    "ComfyUI-GGUF-XPU": "39671fe73117ba97de7011e7e06e32599dcda06d",
+    "ComfyUI-LTXVideo": "15d09abb5a187a8dcaea2fc31fe51ee96e6c9d0d",
+    "ComfyUI-Manager": "f39cbd56fecae0b27a446c0cd450cd591f3a8bea",
+    "ComfyUI-MiniMax-H3-Extend": "d175f0acb46554a81f60354a166d6cebdd2fb078",
+    "ComfyUI-Nacholmo-xpu-vibeslop": "42a02f444471f82aeac5c61c6b644cdd11131c19",
+    "ComfyUI-SolAttn": "5f1c4aac3ca32a00b0b4c15ddbb7cb53fa43344d",
+    "ComfyUI-nunchaku-XPU": "cc0f6236b6c329178ad4ef58452a874e774c7b8e",
+    "Comfyui_Minimax_h3_latent_Upscaler": "d7c01b9011f2e8439493f6c02c29995a27df276f",
+    "RES4LYF": "26036f647ca15d3048a193daf99a40cecfc3820d",
+    "comfyui-easy-use": "b5e31ef12ad9d0b187b545c2707735cc7d581c52",
+    "comfyui-krea2edit": "86f886dac23013d88996e3a2e99093ba44d322fb",
+    "comfyui-videohelpersuite": "115de7a9d9e34410cffb9ecfd268e993b11a50fb",
+    "comfyui_controlnet_aux": "e8b689a513c3e6b63edc44066560ca5919c0576e"
+  },
+  "python": "Python 3.14.7",
+  "torch": "2.15.0.dev20260830+xpu",
+  "torchvision": "0.30.0.dev20260831+xpu",
+  "triton_xpu": "3.8.0+git1e2d42a0"
+}

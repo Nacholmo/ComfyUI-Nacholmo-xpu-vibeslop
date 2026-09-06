@@ -94,6 +94,44 @@ fi
 
 SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Rolling tip: seed versions from the last verified roll when present,
+# so fresh installs reproduce the floating tip instead of stale built-ins.
+# Values are charset-validated before use; built-ins remain the fallback.
+NUNCHAKU_COMMIT="cc0f6236b6c329178ad4ef58452a874e774c7b8e"
+SOLATTN_COMMIT="5f1c4aac3ca32a00b0b4c15ddbb7cb53fa43344d"
+EASYUSE_COMMIT="b5e31ef12ad9d0b187b545c2707735cc7d581c52"
+CACHEDIT_COMMIT="1d92bbd86ec59aa6223fe2368849b7413a1acb93"
+CTRLAUX_COMMIT="e8b689a513c3e6b63edc44066560ca5919c0576e"
+if [ -f "$SUITE_DIR/manifests/last-good.json" ]; then
+    while IFS='=' read -r _k _v; do
+        case "$_k" in
+            TORCH_PIN|TORCHVISION_PIN|NUNCHAKU_COMMIT|SOLATTN_COMMIT|EASYUSE_COMMIT|CACHEDIT_COMMIT|CTRLAUX_COMMIT)
+                if [[ "$_v" =~ ^[A-Za-z0-9.+_:/-]+$ ]]; then
+                    printf -v "$_k" '%s' "$_v"
+                else
+                    echo "[!] Warning: ignoring suspicious last-good value for $_k." >&2
+                fi
+                ;;
+        esac
+    done < <(python3 -c "
+import json
+try:
+    s = json.load(open('$SUITE_DIR/manifests/last-good.json'))
+except Exception:
+    raise SystemExit
+nodes = s.get('nodes', {})
+print('TORCH_PIN=' + str(s.get('torch', '')))
+print('TORCHVISION_PIN=' + str(s.get('torchvision', '')))
+print('NUNCHAKU_COMMIT=' + str(nodes.get('ComfyUI-nunchaku-XPU', '')))
+print('SOLATTN_COMMIT=' + str(nodes.get('ComfyUI-SolAttn', '')))
+print('EASYUSE_COMMIT=' + str(nodes.get('comfyui-easy-use', '')))
+print('CACHEDIT_COMMIT=' + str(nodes.get('ComfyUI-CacheDiT', '')))
+print('CTRLAUX_COMMIT=' + str(nodes.get('comfyui_controlnet_aux', '')))
+" 2>/dev/null)
+    unset _k _v
+    echo "[+] Seeding versions from manifests/last-good.json (torch $TORCH_PIN)."
+fi
+
 if [ -z "$COMFY_ROOT" ]; then
     echo "[!] Notice: ComfyUI root not detected in parent directory."
     echo "    Running standalone dependency setup in current environment."
@@ -221,11 +259,11 @@ if [ -n "$COMFY_ROOT" ]; then
                 && git -C "$COMFY_ROOT/custom_nodes/$2" fetch --depth 1 origin "$3" \
                 && git -C "$COMFY_ROOT/custom_nodes/$2" checkout --detach FETCH_HEAD
         }
-        _omni_clone https://github.com/xiangyuT/ComfyUI-nunchaku-XPU.git ComfyUI-nunchaku-XPU cc0f6236b6c329178ad4ef58452a874e774c7b8e
-        _omni_clone https://github.com/xiangyuT/ComfyUI-SolAttn_xpu.git ComfyUI-SolAttn 5f1c4aac3ca32a00b0b4c15ddbb7cb53fa43344d
-        _omni_clone https://github.com/yolain/ComfyUI-Easy-Use.git comfyui-easy-use b5e31ef12ad9d0b187b545c2707735cc7d581c52
-        _omni_clone https://github.com/Jasonzzt/ComfyUI-CacheDiT.git ComfyUI-CacheDiT 1d92bbd86ec59aa6223fe2368849b7413a1acb93
-        _omni_clone https://github.com/Fannovel16/comfyui_controlnet_aux.git comfyui_controlnet_aux e8b689a513c3e6b63edc44066560ca5919c0576e
+        _omni_clone https://github.com/xiangyuT/ComfyUI-nunchaku-XPU.git ComfyUI-nunchaku-XPU "$NUNCHAKU_COMMIT"
+        _omni_clone https://github.com/xiangyuT/ComfyUI-SolAttn_xpu.git ComfyUI-SolAttn "$SOLATTN_COMMIT"
+        _omni_clone https://github.com/yolain/ComfyUI-Easy-Use.git comfyui-easy-use "$EASYUSE_COMMIT"
+        _omni_clone https://github.com/Jasonzzt/ComfyUI-CacheDiT.git ComfyUI-CacheDiT "$CACHEDIT_COMMIT"
+        _omni_clone https://github.com/Fannovel16/comfyui_controlnet_aux.git comfyui_controlnet_aux "$CTRLAUX_COMMIT"
         if [ -f "$OMNI_NODES_PATCH" ] && [ -d "$COMFY_ROOT/custom_nodes/comfyui_controlnet_aux" ]; then
             if git -C "$COMFY_ROOT/custom_nodes/comfyui_controlnet_aux" status --short | grep -q "depth_anything_v2/dpt.py"; then
                 echo "[*] controlnet_aux XPU patch already applied."
