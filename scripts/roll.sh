@@ -67,15 +67,23 @@ comfyui_controlnet_aux|https://github.com/Fannovel16/comfyui_controlnet_aux.git
 ComfyUI-GGUF-XPU|https://github.com/analytics-zoo/ComfyUI-GGUF-XPU.git
 comfyui-videohelpersuite|https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
 ComfyUI-MiniMax-H3-Extend|https://github.com/kat3ri/ComfyUI-MiniMax-H3-Extend.git
-Comfyui_Minimax_h3_latent_Upscaler|https://github.com/XAyusin/Comfyui_Minimax_h3_latent_Upscaler.git
+Comfyui_Minimax_h3_latent_Upscaler|https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler.git
 ComfyUI-LTXVideo|https://github.com/Lightricks/ComfyUI-LTXVideo.git
 comfyui-frame-interpolation|https://github.com/Fannovel16/comfyui-frame-interpolation.git
-comfyui-krea2edit|https://github.com/kijai/ComfyUI-Krea2Edit.git
-ComfyUI-Flux2Klein-Enhancer|https://github.com/Nacholmo/ComfyUI-Flux2Klein-Enhancer.git
+comfyui-krea2edit|https://github.com/lbouaraba/comfyui-krea2edit.git
+ComfyUI-Flux2Klein-Enhancer|https://github.com/capitan01R/ComfyUI-Flux2Klein-Enhancer.git
 comfyui-unload-model|https://github.com/Nacholmo/comfyui-unload-model.git
 rgthree-comfy|https://github.com/rgthree/rgthree-comfy.git
 RES4LYF|https://github.com/ClownsharkBatwing/RES4LYF.git
 "
+
+# Remotes vary in trailing '.git' — normalize before comparing.
+_norm_remote() {
+    _r="$1"
+    _r="${_r%/}"
+    _r="${_r%.git}"
+    printf '%s' "$_r"
+}
 
 _hold_for() { # $1=dirname -> commit or empty
     [ -f "$HOLDS_FILE" ] || return 0
@@ -262,6 +270,10 @@ fi
 if [ "$SKIP_NODES" -eq 0 ]; then
     echo "$FLOAT_NODES" | while IFS='|' read -r _d _repo; do
         [ -z "$_d" ] && continue
+        # controlnet_aux floats via the dedicated patch-safe block below.
+        if [ "$_d" = "comfyui_controlnet_aux" ]; then
+            continue
+        fi
         if [ ! -d "$COMFY_ROOT/custom_nodes/$_d" ]; then
             echo "[roll] skip $_d (not installed)"
             continue
@@ -271,7 +283,7 @@ if [ "$SKIP_NODES" -eq 0 ]; then
             continue
         fi
         _actual="$(git -C "$COMFY_ROOT/custom_nodes/$_d" remote get-url origin 2>/dev/null || echo none)"
-        if [ "$_actual" != "$_repo" ]; then
+        if [ "$(_norm_remote "$_actual")" != "$(_norm_remote "$_repo")" ]; then
             echo "[roll] skip $_d (remote mismatch: $_actual) — fix manually, see docs."
             continue
         fi
@@ -293,20 +305,41 @@ if [ "$SKIP_NODES" -eq 0 ]; then
         fi
         unset _branch _hold _actual
     done
-    # controlnet_aux XPU patch: hold on reject, never ship unpatched.
-    if [ -d "$COMFY_ROOT/custom_nodes/comfyui_controlnet_aux" ]; then
-        if git -C "$COMFY_ROOT/custom_nodes/comfyui_controlnet_aux" status --short | grep -a -q "depth_anything_v2/dpt.py"; then
+    # controlnet_aux float: clean checkout first (never carry the dirty
+    # patch tree across commits — it can silently half-apply), then apply
+    # the canonical XPU patch. Hold on reject, never ship unpatched.
+    _caux="$COMFY_ROOT/custom_nodes/comfyui_controlnet_aux"
+    if [ -e "$_caux/.git" ]; then
+        _caux_hold="$(_hold_for comfyui_controlnet_aux)"
+        _caux_snap="$(grep -a "^comfyui_controlnet_aux " "$SNAP_DIR/nodes.txt" | awk '{print $2}')"
+        git -C "$_caux" diff -- src/custom_controlnet_aux/depth_anything_v2/dpt.py > "$SNAP_DIR/caux-patch-backup.diff" 2>/dev/null || true
+        git -C "$_caux" checkout -- src/custom_controlnet_aux/depth_anything_v2/dpt.py 2>/dev/null || true
+        if [ -n "$_caux_hold" ]; then
+            echo "[roll] comfyui_controlnet_aux HELD at $_caux_hold"
+            git -C "$_caux" checkout --detach "$_caux_hold" || echo "[roll] WARNING: hold checkout failed for controlnet_aux" >&2
+            git -C "$_caux" apply "$PATCH_FILE" 2>/dev/null || git -C "$_caux" apply "$SNAP_DIR/caux-patch-backup.diff" 2>/dev/null || true
+        else
+            _branch="$(git -C "$_caux" remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p')"
+            if git -C "$_caux" fetch --depth 1 origin "$_branch" && git -C "$_caux" checkout --detach FETCH_HEAD; then
+                echo "[roll] comfyui_controlnet_aux now: $(git -C "$_caux" rev-parse --short HEAD)"
+            else
+                echo "[roll] WARNING: float failed for controlnet_aux, restoring snapshot" >&2
+                git -C "$_caux" checkout --detach "$_caux_snap" 2>/dev/null || true
+                git -C "$_caux" apply "$SNAP_DIR/caux-patch-backup.diff" 2>/dev/null || true
+            fi
+            unset _branch
+        fi
+        if git -C "$_caux" status --short | grep -a -q "depth_anything_v2/dpt.py"; then
             echo "[roll] controlnet_aux XPU patch present."
-        elif git -C "$COMFY_ROOT/custom_nodes/comfyui_controlnet_aux" apply "$PATCH_FILE" 2>/dev/null; then
+        elif git -C "$_caux" apply "$PATCH_FILE" 2>/dev/null; then
             echo "[roll] controlnet_aux XPU patch applied."
         else
-            _snap="$(grep -a "^comfyui_controlnet_aux " "$SNAP_DIR/nodes.txt" | awk '{print $2}')"
-            git -C "$COMFY_ROOT/custom_nodes/comfyui_controlnet_aux" checkout --detach "$_snap" 2>/dev/null || true
-            git -C "$COMFY_ROOT/custom_nodes/comfyui_controlnet_aux" apply "$PATCH_FILE" 2>/dev/null || true
-            echo "comfyui_controlnet_aux=$_snap" >> "$HOLDS_FILE"
-            echo "[roll] WARNING: patch rejected upstream — held comfyui_controlnet_aux at $_snap (added to roll-holds.conf)" >&2
-            unset _snap
+            git -C "$_caux" checkout --detach "$_caux_snap" 2>/dev/null || true
+            git -C "$_caux" apply "$SNAP_DIR/caux-patch-backup.diff" 2>/dev/null || git -C "$_caux" apply "$PATCH_FILE" 2>/dev/null || true
+            echo "comfyui_controlnet_aux=$_caux_snap" >> "$HOLDS_FILE"
+            echo "[roll] WARNING: patch rejected upstream — held comfyui_controlnet_aux at $_caux_snap (added to roll-holds.conf)" >&2
         fi
+        unset _caux _caux_hold _caux_snap
     fi
 fi
 

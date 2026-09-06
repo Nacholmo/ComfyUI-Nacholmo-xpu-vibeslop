@@ -11,7 +11,7 @@ Tooling: `scripts/roll.sh` (the update runner), `scripts/roll-verify.sh`
 
 ## 1. Why floating needs machinery
 
-Two hard constraints fight floating versions:
+Three hard constraints fight floating versions (a lockstep triple):
 
 1. **Provider hash contract.** `omni_xpu_kernel` + both provider wheels are
    built against an EXACT torch build (`runtime.torch_version` in the
@@ -21,10 +21,20 @@ Two hard constraints fight floating versions:
    *silent degradation*, not a crash. `roll.sh` therefore **rebuilds the
    provider wheels** against the new torch (see §3) and the verify gate
    fails the roll if Kitchen XPU is not `active`.
-2. **Local patch drift.** `comfyui_controlnet_aux` carries the
+2. **Core ↔ official ↔ provider lockstep.** ComfyUI core imports provider
+   surface directly (observed: core `d03a2430` needs
+   `comfy_aimdo.malloc_graph`, only in official ≥0.5.x) while the provider
+   sources accept only the older official (0.4.15). Floating any one side
+   breaks the other two — proven by two RED rolls (first: official 0.5.2
+   rejected by providers; second: new core crashing on held 0.4.15).
+   Until provider *sources* move (manual rebuild, §3), `comfy-core` stays
+   held in `roll-holds.conf`.
+3. **Local patch drift.** `comfyui_controlnet_aux` carries the
    DepthAnythingV2 XPU patch. A new upstream commit can reject the patch.
-   `roll.sh` holds that node at its last-good commit and warns instead of
-   shipping unpatched (unpatched = wrong-device crash on XPU).
+   `roll.sh` floats it from a *clean* tree and holds it at last-good on
+   reject instead of shipping unpatched (unpatched = wrong-device crash
+   on XPU). Never carry the dirty patch tree across the float checkout —
+   it can silently half-apply.
 
 Everything else floats freely; pip resolves companion deps unpinned.
 
