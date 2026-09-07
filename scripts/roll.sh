@@ -144,7 +144,9 @@ git branch --show-current > "$SNAP_DIR/comfy-core-branch.txt" 2>/dev/null || ech
 for _d in "$COMFY_ROOT"/custom_nodes/*/; do
     _n="$(basename "$_d")"
     if [ -e "$_d/.git" ]; then
-        echo "$_n $(git -C "$_d" rev-parse HEAD 2>/dev/null || echo unknown) $(git -C "$_d" branch --show-current 2>/dev/null || echo DETACHED)" >> "$SNAP_DIR/nodes.txt"
+        _c="$(git -C "$_d" rev-parse HEAD 2>/dev/null || echo unknown)"
+        _b="$(git -C "$_d" branch --show-current 2>/dev/null || true)"
+        echo "$_n $_c ${_b:-DETACHED}" >> "$SNAP_DIR/nodes.txt"
     else
         echo "$_n (no-git)" >> "$SNAP_DIR/nodes.txt"
     fi
@@ -412,7 +414,7 @@ try:
     with open("$SNAP_DIR/nodes.txt") as f:
         for line in f:
             parts = line.split()
-            if len(parts) >= 3 and parts[1] not in ("(no-git)", "unknown"):
+            if len(parts) >= 2 and parts[1] not in ("(no-git)", "unknown"):
                 d = parts[0]
                 nodes[d] = _out(f"git -C custom_nodes/{d} rev-parse HEAD")
 except OSError:
