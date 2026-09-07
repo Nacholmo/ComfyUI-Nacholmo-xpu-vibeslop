@@ -33,6 +33,10 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 QUANTIZATION_THRESHOLD = 1024
 MAX_TENSOR_NAME_LENGTH = 127
 MAX_TENSOR_DIMS = 4
+# 2-D float tables that must keep source precision: the adaLN curve table is
+# consumed by a mixed-dtype torch.lerp in core's MiniMax forward, and other
+# backends silently promote while XPU oneDNN rejects the mix.
+HIPREC_KEYS = ["adaln_t_table"]
 
 
 def _load_quarot():
@@ -146,6 +150,8 @@ def write_gguf(sd, dst_path):
             n_params *= d
         if old_dtype in (torch.float32, torch.bfloat16):
             if n_dims == 1 or n_params <= QUANTIZATION_THRESHOLD:
+                data_qtype = gguf.GGMLQuantizationType.F32
+            elif any(h in key for h in HIPREC_KEYS):
                 data_qtype = gguf.GGMLQuantizationType.F32
 
         try:

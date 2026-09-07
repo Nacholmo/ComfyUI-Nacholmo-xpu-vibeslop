@@ -45,6 +45,14 @@ def apply_minimax_upscaler_xpu():
         log.debug(f"MiniMax upscaler XPU patch not applied: {e}")
 
 
+def apply_xpu_lerp_promotion():
+    try:
+        from .xpu_lerp_promotion import apply
+        apply()
+    except Exception as e:
+        log.debug(f"XPU lerp promotion not applied: {e}")
+
+
 def apply_version_check_hold():
     try:
         from .comfy_version_check import apply
@@ -58,6 +66,7 @@ def apply_all_patches():
     apply_vram_guard()
     apply_minimax_factor()
     apply_minimax_upscaler_xpu()
+    apply_xpu_lerp_promotion()
     apply_version_check_hold()
 
 
@@ -67,6 +76,7 @@ __all__ = [
     "install_deferred_vram_guard",
     "apply_minimax_factor",
     "apply_minimax_upscaler_xpu",
+    "apply_xpu_lerp_promotion",
     "apply_version_check_hold",
     "apply_all_patches",
 ]

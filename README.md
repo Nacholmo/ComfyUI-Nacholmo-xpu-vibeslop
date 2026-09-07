@@ -65,6 +65,9 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
 - **MiniMax-H3 Latent Upscaler XPU Patch (`minimax_upscaler_xpu.py`)**:
   - Dynamically patches `Comfyui_Minimax_h3_latent_Upscaler` (both 2D and 3D nodes) at runtime via meta-path import hooks and memory guards without modifying the original node files.
   - Automatically resolves `"xpu"` and seamlessly routes default `"cuda"` calls to Intel Arc XPU, updates node device schemas, and handles XPU VRAM caching cleanup.
+- **XPU Lerp Promotion Shim (`patches/xpu_lerp_promotion.py`)**:
+  - OneDNN rejects mixed-dtype `torch.lerp` (CUDA/CPU silently promote), which aborts MiniMax-H3 sampling at the adaLN curve lookup when the table dtype differs from the float32 blend weight (`expected dtype Half for 'weight' but got dtype float`).
+  - Promotes mixed-dtype tensor inputs to their common type first; same-dtype and scalar-weight calls pass through untouched.
 
 ### 3. DarkComfyX Theme & Appearance Port
 
