@@ -135,9 +135,25 @@ def _native_av_schedule(model):
     return av is not None and isinstance(ms, av)
 
 
+def _warn_if_truncated_schedule(sigmas):
+    """Warn when the incoming sigma span cannot denoise (e.g. only the head of
+    a longer schedule after SplitSigmas). A 4-step Euler run over sigma 1.0->0.92
+    moves the latent ~8% and the output stays noise; the turbo sampler needs the
+    full 1->0 span (BasicScheduler simple, steps=4)."""
+    try:
+        hi, lo = float(sigmas[0]), float(sigmas[-1])
+    except Exception:
+        return
+    if lo > 0.05:
+        print(f"[H3TURBO sampler] WARNING: sigma schedule spans {hi:.4f}->{lo:.4f}, "
+              f"never reaching ~0: output will stay noisy. Feed the full 1->0 span "
+              f"(BasicScheduler scheduler=simple, steps=4, denoise=1.0).", flush=True)
+
+
 @torch.no_grad()
 def _turbo_sampler(model, x, sigmas, extra_args=None, callback=None, disable=None,
                    **kwargs):
+    _warn_if_truncated_schedule(sigmas)
     extra_args = {} if extra_args is None else extra_args
     s_in = x.new_ones([x.shape[0]])
     _rms = lambda t: float(t.float().pow(2).mean().sqrt())
