@@ -251,6 +251,36 @@ python custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/tools/convert_upscale_models.p
 python custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/tools/convert_upscale_models.py --force
 ```
 
+## Converting WINT8 MiniMax-H3 Models to GGUF (Q4_K_S)
+
+WINT8-quantized MiniMax-H3 checkpoints (int8 weights + `weight_scale` +
+`comfy_quant` markers, usually QuaRot-rotated) can be converted to GGUF for
+low-RAM inference. Two steps, both hosted in `tools/` so they survive
+companion-repo updates:
+
+```bash
+# 1. Dequantize (incl. inverse Hadamard un-rotation) -> full-precision GGUF:
+./venv/bin/python custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/tools/convert_wint8_minimax_h3.py \
+  --src model.safetensors --dst model-BF16.gguf
+
+# 2. Build a patched llama-quantize once (external clone is never edited in place):
+cd /path/to/llama.cpp
+git apply <suite>/tools/llama-minimax-h3.patch
+cmake -B build-minimax-cpu -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON \
+  -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF
+cmake --build build-minimax-cpu --target llama-quantize -j$(nproc)
+git checkout -- src/llama-arch.cpp src/llama-arch.h src/llama-model.cpp src/llama-quant.cpp src/models/models.h
+
+# 3. Quantize:
+./build-minimax-cpu/bin/llama-quantize model-BF16.gguf model-Q4_K_S.gguf Q4_K_S
+```
+
+> [!WARNING]
+> Never feed the raw int8 file to a plain safetensors->GGUF converter: it
+> silently bakes rotated int8 values as real weights. The tool above inverts
+> the suite's own quantizer math (`W = (int8 * scale) @ H`, group 256) and
+> drops the consumed `weight_scale` / `comfy_quant` tensors.
+
 ---
 
 ## Acknowledgments & Licenses
@@ -261,3 +291,4 @@ python custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/tools/convert_upscale_models.p
 - **WINT8 QuaRot**: Hadamard rotation logic originally from [newgrit1004/ComfyUI-ZImage-Triton](https://github.com/newgrit1004/ComfyUI-ZImage-Triton) (MIT). See `NOTICE`.
 - **Video Combine Sync**: Extends [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) with duration-matching atempo audio filter chaining (kept as external companion, not copied).
 - **MiniMax-H3 Extend Split & Stitching Suite**: Interoperates with [ComfyUI-MiniMax-H3-Extend](https://github.com/kat3ri/ComfyUI-MiniMax-H3-Extend) by kat3ri (external companion, no code copied) for `context_latent` video continuation.
+- **GGUF Conversion Conventions**: `tools/convert_wint8_minimax_h3.py` adapts tensor-layout logic from [city96/ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) `tools/convert.py` (Copyright (c) City96, **Apache-2.0**).
