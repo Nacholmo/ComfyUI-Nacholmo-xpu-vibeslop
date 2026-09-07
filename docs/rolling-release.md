@@ -97,6 +97,12 @@ Sources live outside this repo (Intel llm-scaler checkout):
 
 ## 4. What does NOT roll automatically
 
+- **Official comfy-kitchen/comfy-aimdo**: held for the provider contract.
+  Core's version-compatibility banner (boot log + UI) would nag about them,
+  so `patches/comfy_version_check.py` clamps their *reported* required
+  versions to installed (registered in prestartup — frontend init runs
+  before custom-node import). Frontend/docs packages float normally.
+
 - **`omni_xpu_kernel`**: full SYCL/CUTLASS rebuild (`icx`, `CUTLASS_SYCL_ROOT`,
   `OMNI_XPU_REQUIRE_CUTE=1`, hours of compile). Held at the last working
   wheel; installed `--no-deps` over new torch. If the kernel's native ABI

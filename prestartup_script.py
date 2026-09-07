@@ -26,6 +26,15 @@ try:
 except Exception:
     pass
 
+# Version-check hold: must run here, not only at custom-node import time.
+# Core's frontend init (which emits the version-compatibility banner) runs
+# BEFORE custom nodes load, so registering in apply_all_patches() alone is
+# too late. This module is torch-free, hence prestartup-safe.
+try:
+    _load_and_run("patches/comfy_version_check.py", "apply")
+except Exception:
+    pass
+
 # Note: minimax_upscaler_xpu is intentionally NOT loaded here.
 # It imports torch at the top level, which would trigger
 # main.py:244 "Torch already imported" warning.

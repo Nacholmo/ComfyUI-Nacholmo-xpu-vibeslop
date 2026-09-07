@@ -45,11 +45,20 @@ def apply_minimax_upscaler_xpu():
         log.debug(f"MiniMax upscaler XPU patch not applied: {e}")
 
 
+def apply_version_check_hold():
+    try:
+        from .comfy_version_check import apply
+        apply()
+    except Exception as e:
+        log.debug(f"Version-check hold not applied: {e}")
+
+
 def apply_all_patches():
     apply_torchaudio_guard()
     apply_vram_guard()
     apply_minimax_factor()
     apply_minimax_upscaler_xpu()
+    apply_version_check_hold()
 
 
 __all__ = [
@@ -58,5 +67,6 @@ __all__ = [
     "install_deferred_vram_guard",
     "apply_minimax_factor",
     "apply_minimax_upscaler_xpu",
+    "apply_version_check_hold",
     "apply_all_patches",
 ]
