@@ -52,8 +52,12 @@ Everything else floats freely; pip resolves companion deps unpinned.
 | 1b | Torch keep (`--skip-torch`) | Reinstall the **snapshot** torch/torchvision/triton-xpu pins + Omni wheels into the fresh venv (a skipped torch still gets a complete stack — a bare venv kills both boots; observed) | full rollback |
 | 2 | Providers | Re-stamp provider wheels for the new torch via `build_wheel.py` from existing source wheels (`--source-wheel/--source-revision/--torch-version/--xpu-target bmg`), install `--no-deps`; kernel wheel reused `--no-deps` (no kernel rebuild — see §4) | full rollback |
 | 3 | Official kitchen/aimdo | **HELD** — re-pinned by root `requirements.txt`, never `-U`'d (see §3) | advance only with provider sources (manual) |
-| 4 | ComfyUI core | `git fetch origin` + checkout `origin/HEAD` | `roll-holds.conf`: `comfy-core=<commit>` |
+| 4 | ComfyUI core | `git fetch origin` + checkout `origin/HEAD` (detached — see note below) | `roll-holds.conf`: `comfy-core=<commit>` |
 | 5 | Custom nodes | Same float per dir in `FLOAT_NODES`; controlnet_aux patch re-applied, hold-on-reject | `roll-holds.conf`: `<dirname>=<commit>` |
+
+> Note: after a green core float, core is detached at the recorded commit
+> (`last-good.json: comfyui_core`). Audit position via `git log`, not branch
+> — floating tracks commits, not branches.
 | 6 | Node requirements | Ensure-installed for present node dirs (no `-U`: completes the fresh venv without floating; `companion-pins -U` is the version floater) + nunchaku dist rebuild | warnings only (fix forward) |
 | 7 | Verify gate | `scripts/roll-verify.sh` (see §5) | fail → automatic rollback |
 | 8 | Record | Write `manifests/last-good.json`; prune pre-roll venvs (keep 1) | `setup.sh --fresh-venv` seeds from it |
