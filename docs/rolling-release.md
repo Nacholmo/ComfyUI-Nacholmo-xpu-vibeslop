@@ -27,8 +27,11 @@ Three hard constraints fight floating versions (a lockstep triple):
    sources accept only the older official (0.4.15). Floating any one side
    breaks the other two — proven by two RED rolls (first: official 0.5.2
    rejected by providers; second: new core crashing on held 0.4.15).
-   Until provider *sources* move (manual rebuild, §3), `comfy-core` stays
-   held in `roll-holds.conf`.
+   Resolved without moving officials/providers: `scripts/apply-aimdo-shim.sh`
+   extracts `malloc_graph.py` from the official PyPI wheel at install time
+   (GPLv3, same licence as installed comfy-aimdo; nothing vendored in this
+   repo). On XPU the module is import-only — every use is gated behind
+   `is_device_cuda()` — so the shim never executes natively here.
 3. **Local patch drift.** `comfyui_controlnet_aux` carries the
    DepthAnythingV2 XPU patch. A new upstream commit can reject the patch.
    `roll.sh` floats it from a *clean* tree and holds it at last-good on
@@ -46,11 +49,12 @@ Everything else floats freely; pip resolves companion deps unpinned.
 |---|---|---|---|
 | 0 | Snapshot | `pip freeze` + all node commits → `manifests/roll-snapshots/<date>/`; `venv` → `venv.pre-roll-<date>` (instant `mv`) | rollback source |
 | 1 | Torch nightly | `pip install --pre -U torch torchaudio torchvision triton-xpu` (nightly index, **no pin**) | full rollback |
+| 1b | Torch keep (`--skip-torch`) | Reinstall the **snapshot** torch/torchvision/triton-xpu pins + Omni wheels into the fresh venv (a skipped torch still gets a complete stack — a bare venv kills both boots; observed) | full rollback |
 | 2 | Providers | Re-stamp provider wheels for the new torch via `build_wheel.py` from existing source wheels (`--source-wheel/--source-revision/--torch-version/--xpu-target bmg`), install `--no-deps`; kernel wheel reused `--no-deps` (no kernel rebuild — see §4) | full rollback |
 | 3 | Official kitchen/aimdo | **HELD** — re-pinned by root `requirements.txt`, never `-U`'d (see §3) | advance only with provider sources (manual) |
 | 4 | ComfyUI core | `git fetch origin` + checkout `origin/HEAD` | `roll-holds.conf`: `comfy-core=<commit>` |
 | 5 | Custom nodes | Same float per dir in `FLOAT_NODES`; controlnet_aux patch re-applied, hold-on-reject | `roll-holds.conf`: `<dirname>=<commit>` |
-| 6 | Requirements | Root `requirements.txt` + each floated node's `requirements.txt` (unpinned) + nunchaku dist rebuild | full rollback |
+| 6 | Node requirements | Ensure-installed for present node dirs (no `-U`: completes the fresh venv without floating; `companion-pins -U` is the version floater) + nunchaku dist rebuild | warnings only (fix forward) |
 | 7 | Verify gate | `scripts/roll-verify.sh` (see §5) | fail → automatic rollback |
 | 8 | Record | Write `manifests/last-good.json`; prune pre-roll venvs (keep 1) | `setup.sh --fresh-venv` seeds from it |
 

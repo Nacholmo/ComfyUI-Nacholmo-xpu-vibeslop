@@ -233,6 +233,31 @@ if [ "$SKIP_TORCH" -eq 0 ]; then
     pip install --no-deps "$_kernel" || rollback "kernel wheel install failed"
     pip install "onednn==2026.0.0" || rollback "onednn install failed"
     unset _kernel
+else
+    # --skip-torch keeps the snapshot torch stack, but the venv above is
+    # still rebuilt fresh — so reinstall it explicitly. (Previously this
+    # branch left a bare venv: no torch/providers/kernel -> both boots
+    # died at import. Observed on the core-only roll.)
+    echo "[roll] keeping snapshot torch stack ..."
+    _snap_torch="$(grep -a '^torch==' "$SNAP_DIR/freeze.txt" | head -n 1)"
+    _snap_tv="$(grep -a '^torchvision==' "$SNAP_DIR/freeze.txt" | head -n 1)"
+    _snap_triton="$(grep -a '^triton-xpu==' "$SNAP_DIR/freeze.txt" | head -n 1)"
+    if [ -z "$_snap_torch" ]; then
+        rollback "snapshot has no torch pin"
+    fi
+    pip install "$_snap_torch" "$_snap_tv" "$_snap_triton" --extra-index-url "$TORCH_INDEX" \
+        || rollback "snapshot torch stack install failed"
+    NEW_TORCH="$(python -c 'import torch; print(torch.__version__)')"
+    echo "[roll] torch now: $NEW_TORCH (snapshot)"
+    pip install --no-deps \
+        "$WHEELS_SRC/kitchen-source"/comfy_kitchen-*.whl \
+        "$WHEELS_SRC/kitchen-provider"/comfy_kitchen_xpu_runtime-*.whl \
+        "$WHEELS_SRC/aimdo-source"/comfy_aimdo-*.whl \
+        "$WHEELS_SRC/aimdo-provider"/comfy_aimdo_xpu_runtime-*.whl \
+        "$WHEELS_SRC"/omni_xpu_kernel-*torch215*.whl \
+        || rollback "Omni wheel reinstall failed"
+    pip install "onednn==2026.0.0" || rollback "onednn install failed"
+    unset _snap_torch _snap_tv _snap_triton
 fi
 
 # --- Root packages (official kitchen/aimdo HELD by requirements.txt) ---
@@ -343,22 +368,26 @@ if [ "$SKIP_NODES" -eq 0 ]; then
     fi
 fi
 
-# --- 6. Node requirements (unpinned float) ---
-if [ "$SKIP_NODES" -eq 0 ]; then
-    while IFS='|' read -r _d _repo; do
-        [ -z "$_d" ] && continue
-        if [ -f "$COMFY_ROOT/custom_nodes/$_d/requirements.txt" ]; then
-            pip install -r "$COMFY_ROOT/custom_nodes/$_d/requirements.txt" \
-                || echo "[roll] WARNING: $_d requirements failed (fix forward)" >&2
-        fi
-    done <<< "$FLOAT_NODES"
-    unset _d _repo
-    if [ -d "$COMFY_ROOT/custom_nodes/ComfyUI-nunchaku-XPU" ]; then
-        pip install --no-deps --no-build-isolation --ignore-requires-python \
-            "$COMFY_ROOT/custom_nodes/ComfyUI-nunchaku-XPU" \
-            || echo "[roll] WARNING: nunchaku dist rebuild failed (fix forward)" >&2
+# --- 6. Node requirements: ensure-installed, ALWAYS (fresh venv needs
+# them even when the git float is skipped; no -U here, so this completes
+# the venv without floating versions — companion-pins (-U) is the floater).
+while IFS='|' read -r _d _repo; do
+    [ -z "$_d" ] && continue
+    if [ -f "$COMFY_ROOT/custom_nodes/$_d/requirements.txt" ]; then
+        pip install -r "$COMFY_ROOT/custom_nodes/$_d/requirements.txt" \
+            || echo "[roll] WARNING: $_d requirements failed (fix forward)" >&2
     fi
+done <<< "$FLOAT_NODES"
+unset _d _repo
+if [ -d "$COMFY_ROOT/custom_nodes/ComfyUI-nunchaku-XPU" ]; then
+    pip install --no-deps --no-build-isolation --ignore-requires-python \
+        "$COMFY_ROOT/custom_nodes/ComfyUI-nunchaku-XPU" \
+        || echo "[roll] WARNING: nunchaku dist rebuild failed (fix forward)" >&2
 fi
+
+# --- 6b. AIMDO malloc_graph shim (idempotent; required once core floats
+# past the hard `import comfy_aimdo.malloc_graph`; import-only on XPU) ---
+bash "$SUITE_DIR/scripts/apply-aimdo-shim.sh" || rollback "AIMDO shim failed"
 
 # --- 7. Verify gate ---
 echo "[roll] running verify gate ..."
@@ -383,8 +412,8 @@ try:
     with open("$SNAP_DIR/nodes.txt") as f:
         for line in f:
             parts = line.split()
-            if len(parts) == 2:
-                d, _old = parts
+            if len(parts) >= 3 and parts[1] not in ("(no-git)", "unknown"):
+                d = parts[0]
                 nodes[d] = _out(f"git -C custom_nodes/{d} rev-parse HEAD")
 except OSError:
     pass

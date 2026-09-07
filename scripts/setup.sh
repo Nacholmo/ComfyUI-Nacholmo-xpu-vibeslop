@@ -177,6 +177,11 @@ if [ "$FRESH_VENV" -eq 1 ]; then
     else
         echo "[!] Warning: WHEELS_DIR not found ($WHEELS_DIR); skipping Omni wheels." >&2
     fi
+    # AIMDO malloc_graph shim (newer cores hard-import it; providers track
+    # official 0.4.15 which lacks it — import-only on XPU, see script header).
+    if [ -f "$SUITE_DIR/scripts/apply-aimdo-shim.sh" ]; then
+        bash "$SUITE_DIR/scripts/apply-aimdo-shim.sh" || echo "[!] Warning: AIMDO shim failed." >&2
+    fi
 elif [ -d "venv" ]; then
     echo "[+] Activating venv/..."
     source venv/bin/activate
