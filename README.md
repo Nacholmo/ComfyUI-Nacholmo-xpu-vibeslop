@@ -265,6 +265,11 @@ companion-repo updates:
 # 1. Dequantize (incl. inverse Hadamard un-rotation) -> full-precision GGUF:
 ./venv/bin/python custom_nodes/ComfyUI-Nacholmo-xpu-vibeslop/tools/convert_wint8_minimax_h3.py \
   --src model.safetensors --dst model-BF16.gguf
+# Hadamard family defaults to regular/ConvRot (third-party files: Dasiwa,
+# ErosMax, core/kitchen/OMNI ecosystem). Use --hadamard sylvester only for
+# files made with this suite's own (scipy-based) quantizer. Wrong family
+# silently yields plausible-looking garbage: verify by checking that
+# un-rotated qkv columns recover spiky outlier structure.
 
 # 2. Build a patched llama-quantize once (external clone is never edited in place):
 cd /path/to/llama.cpp

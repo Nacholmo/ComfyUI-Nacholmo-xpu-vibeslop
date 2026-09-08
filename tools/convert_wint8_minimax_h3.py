@@ -8,6 +8,17 @@
 #   W = (int8.float() * per_row_scale) @ H_block   (per convrot_groupsize group)
 # which satisfies x @ W^T == (x @ H) @ W_rot^T as executed by Int8XPUOps.
 #
+# HADAMARD VARIANT (critical): third-party WINT8 files (Dasiwa, ErosMax, ...,
+# anything marked convrot from the ConvRot ecosystem, including core's native
+# int8 path, comfy-kitchen and the OMNI kernels) use the REGULAR Hadamard
+# (4x4-Kronecker construction, power-of-4 sizes). The suite's own quantizer
+# historically used Sylvester (2x2) Hadamards via scipy; the two matrices are
+# both orthogonal/symmetric but DIFFER, and un-rotating with the wrong one
+# silently yields plausible-looking garbage (verified: spikiness restored with
+# regular-H, mosaic output with Sylvester-H). Default is regular; --hadamard
+# sylvester keeps the legacy behavior for files made with this suite's own
+# quantizer.
+#
 # GGUF tensor-layout conventions (arch tag, ftype selection, F32 rules for
 # 1-D/small tensors) are adapted from city96/ComfyUI-GGUF tools/convert.py
 # (Copyright (c) City96, Apache-2.0).
@@ -47,6 +58,26 @@ def _load_quarot():
     return mod
 
 
+def build_regular_hadamard(size, dtype=torch.float32):
+    """Normalized REGULAR orthogonal Hadamard (ConvRot family): Kronecker
+    products of the 4x4 base, sizes must be powers of 4. Same construction as
+    comfy-kit's tensor/int8_utils and the OMNI convrot kernels (which consume
+    third-party convrot-quantized files), and NOT the same matrix as the
+    Sylvester (2x2) Hadamard from scipy."""
+    import math
+    if size < 4 or (size & (size - 1)) != 0 or math.log(size, 4) % 1 != 0:
+        raise ValueError(f"Regular Hadamard size must be a power of 4, got {size}")
+    h4 = torch.tensor(
+        [[1, 1, 1, -1], [1, 1, -1, 1], [1, -1, 1, 1], [-1, 1, 1, 1]],
+        dtype=dtype)
+    h = h4
+    n = 4
+    while n < size:
+        h = torch.kron(h, h4)
+        n *= 4
+    return h / (size ** 0.5)
+
+
 def _strip_prefix(state_dict):
     for pfx in ["model.diffusion_model.", "model."]:
         if any(k.startswith(pfx) for k in state_dict.keys()):
@@ -65,12 +96,14 @@ def _parse_marker(raw):
         return {}
 
 
-def dequantize_state_dict(sd, quarot):
+def dequantize_state_dict(sd, quarot, hadamard="regular"):
     """Replace WINT8 int8 weights with full-precision unrotated weights.
 
     Consumes sibling weight_scale/comfy_quant/input_scale tensors.
-    Returns the number of dequantized layers.
+    hadamard: "regular" (ConvRot ecosystem default) or "sylvester" (this
+    suite's own legacy quantizer). Returns the number of dequantized layers.
     """
+    use_regular = (hadamard == "regular")
     hadamard_cache = {}
     n_dq = 0
     for key in list(sd.keys()):
@@ -92,7 +125,10 @@ def dequantize_state_dict(sd, quarot):
                 if in_f % gs != 0:
                     raise ValueError(f"in_features {in_f} not divisible by group_size {gs} ({key})")
                 if gs not in hadamard_cache:
-                    hadamard_cache[gs] = quarot.build_hadamard(gs, device="cpu", dtype=torch.float32)
+                    if use_regular:
+                        hadamard_cache[gs] = build_regular_hadamard(gs, dtype=torch.float32)
+                    else:
+                        hadamard_cache[gs] = quarot.build_hadamard(gs, device="cpu", dtype=torch.float32)
                 H = hadamard_cache[gs]
                 w = (w.view(out_f, in_f // gs, gs) @ H).reshape(out_f, in_f)
             orig = str(meta.get("orig_dtype", "torch.bfloat16"))
@@ -172,14 +208,15 @@ def write_gguf(sd, dst_path):
     return dst_path
 
 
-def convert_file(src, dst=None):
+def convert_file(src, dst=None, hadamard="regular"):
     quarot = _load_quarot()
     logging.info("Loading safetensors (full model into RAM)...")
     sd = _strip_prefix(load_file(src))
     if not ("audio_patch_proj.weight" in sd and "video_patch_proj.weight" in sd):
         raise RuntimeError("Not a MiniMax-H3 state dict (missing audio/video patch proj)")
     logging.info(f"* Architecture detected from input: minimax_h3 ({len(sd)} tensors)")
-    n_dq = dequantize_state_dict(sd, quarot)
+    logging.info(f"* Hadamard variant: {hadamard}")
+    n_dq = dequantize_state_dict(sd, quarot, hadamard=hadamard)
     logging.info(f"Dequantized {n_dq} int8 layers, {len(sd)} tensors remain")
     if dst is None:
         base, _ = os.path.splitext(src)
@@ -194,10 +231,12 @@ def main():
     ap = argparse.ArgumentParser(description="WINT8 MiniMax-H3 safetensors -> BF16 GGUF")
     ap.add_argument("--src", required=True)
     ap.add_argument("--dst", default=None)
+    ap.add_argument("--hadamard", default="regular", choices=["regular", "sylvester"],
+                    help="Hadamard family used at quantize time (default: regular/ConvRot)")
     args = ap.parse_args()
     if not os.path.isfile(args.src):
         ap.error("No input provided!")
-    convert_file(args.src, args.dst)
+    convert_file(args.src, args.dst, hadamard=args.hadamard)
 
 
 if __name__ == "__main__":
