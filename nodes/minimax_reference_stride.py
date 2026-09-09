@@ -67,7 +67,11 @@ from comfy_api.latest import ComfyExtension, io
 def _apply_stride_patch():
     if getattr(_minimax_model.PackedLayout, "_nacholmo_stride_patched", False):
         return
+    # Chain: capture whatever __init__ is currently installed (may already be
+    # Sol-Attn's wrapper) so non-strided refs still flow through it.
     orig_ref_t_span = _minimax_model._ref_t_span
+    if getattr(orig_ref_t_span, "_nacholmo_stride_patched", False):
+        return
     orig_video_t_spans = _minimax_model._video_t_spans
     orig_video_t_grid = _minimax_model._video_t_grid
     orig_video_grid = _minimax_model._video_grid
@@ -316,18 +320,35 @@ def _apply_stride_patch():
             seg_abs.append((off, off + n, kind))
             off += n
         self.segments = seg_abs
+        # Preserve Sol-Attn span tracking when striding (its wrapper is bypassed
+        # by this custom init since upstream has no stride path to delegate to).
+        try:
+            from .sol_attn_node import _video_span as _sol_video_span, _span_set as _sol_span_set
+            try:
+                _sol_span = _sol_video_span(self, latent_t, latent_h, latent_w)
+            except Exception:
+                _sol_span = None
+            _sol_bounds = next(((a, b) for a, b, kind in self.segments if kind == "video"), None)
+            if _sol_span is not None and _sol_bounds is not None and torch.is_tensor(getattr(self, "position_ids", None)):
+                _sol_span_set(self.position_ids, (self, _sol_bounds, _sol_span))
+        except Exception:
+            pass
 
     _minimax_model._ref_t_span = _patched_ref_t_span
+    _patched_PackedLayout_init._nacholmo_stride_patched = True
     _minimax_model.PackedLayout.__init__ = _patched_PackedLayout_init
     _minimax_model.PackedLayout._nacholmo_stride_patched = True
     _minimax_model._ref_t_span._nacholmo_stride_patched = True
     print("[MiniMaxH3-Stride] Patched PackedLayout to preserve reference duration for strided videos (with Extend compat, frame_count support)", flush=True)
 
-# Apply at import time
-try:
-    _apply_stride_patch()
-except Exception as e:
-    print(f"[MiniMaxH3-Stride] Failed to patch PackedLayout: {e}", flush=True)
+# Applied lazily on first execute (not at import) so vanilla MiniMax
+# workflows that never use this node keep stock PackedLayout behavior,
+# and Sol-Attn's wrapper (installed on model apply) can chain cleanly.
+def _ensure_stride_patch():
+    try:
+        _apply_stride_patch()
+    except Exception as e:
+        print(f"[MiniMaxH3-Stride] Failed to patch PackedLayout: {e}", flush=True)
 
 # ---- copied helpers from comfy_extras/nodes_minimax_h3.py for self-containment ----
 CANVAS_MULTIPLE = 32
@@ -468,6 +489,7 @@ class MiniMaxH3ReferenceToVideoStride(io.ComfyNode):
                 ref_image_size="match", ref_video_stride=2, qwen_stride_mode="strided",
                 stride_mode="pre_vae", preserve_duration=True,
                 ref_images=None, ref_videos=None, ref_video_audios=None, ref_audios=None) -> io.NodeOutput:
+        _ensure_stride_patch()
         # Clamp stride to sane range even if UI allows 1..8
         try:
             stride = int(ref_video_stride)

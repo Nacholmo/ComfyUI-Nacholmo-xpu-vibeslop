@@ -193,6 +193,7 @@ def _patch_packed_layout(module):
             _span_set(self.position_ids, (self, bounds, span))
 
     layout_cls.__init__ = __init__
+    __init__._nacholmo_sol_patched = True
     _PATCHED_LAYOUTS.add(layout_cls)
 
 
