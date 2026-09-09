@@ -3,3 +3,6 @@ psutil
 numpy
 spandrel
 pillow
+gguf
+safetensors
+tqdm

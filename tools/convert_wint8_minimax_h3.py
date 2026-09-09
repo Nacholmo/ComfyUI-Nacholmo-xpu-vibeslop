@@ -82,10 +82,10 @@ def _strip_prefix(state_dict):
     for pfx in ["model.diffusion_model.", "model."]:
         if any(k.startswith(pfx) for k in state_dict.keys()):
             logging.info(f"State dict prefix found: '{pfx}'")
-            return {k.replace(pfx, ""): v for k, v in state_dict.items() if pfx in k}
+            return {k[len(pfx):] if k.startswith(pfx) else k: v for k, v in state_dict.items()}
     if all(k.startswith("net.") for k in state_dict.keys()):
         logging.info("State dict prefix found: 'net.'")
-        return {k.replace("net.", ""): v for k, v in state_dict.items()}
+        return {k[len("net."):]: v for k, v in state_dict.items()}
     return state_dict
 
 
@@ -170,8 +170,9 @@ def write_gguf(sd, dst_path):
         if data.dtype == torch.bfloat16:
             data = data.to(torch.float32).numpy()
             data_qtype = gguf.GGMLQuantizationType.BF16
-        elif data.dtype in [getattr(torch, "float8_e4m3fn", "_invalid"),
-                            getattr(torch, "float8_e5m2", "_invalid")]:
+        elif data.dtype in [d for d in
+                             (getattr(torch, "float8_e4m3fn", None),
+                              getattr(torch, "float8_e5m2", None)) if isinstance(d, torch.dtype)]:
             data = data.to(torch.float16).numpy()
             data_qtype = gguf.GGMLQuantizationType.F16
         else:

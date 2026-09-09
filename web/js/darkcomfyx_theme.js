@@ -248,15 +248,24 @@ app.registerExtension({
   ],
 
   async setup() {
-    registerColorPalette();
-    updateStyles();
+    try {
+      registerColorPalette();
+      updateStyles();
+    } catch (err) {
+      console.warn("[DarkComfyX] theme setup failed, continuing without styling:", err);
+      return;
+    }
 
     // If active palette is DarkComfyX, enforce canvas grid background
-    const activePalette = app.ui.settings.getSettingValue("Comfy.ColorPalette");
-    if (activePalette === THEME_ID && app.canvas) {
-      app.canvas.background_image = BACKGROUND_GRID_BASE64;
-      app.canvas.clear_background_color = "#191919";
-      app.canvas.setDirty(true, true);
+    try {
+      const activePalette = app.ui.settings.getSettingValue("Comfy.ColorPalette");
+      if (activePalette === THEME_ID && app.canvas) {
+        app.canvas.background_image = BACKGROUND_GRID_BASE64;
+        app.canvas.clear_background_color = "#191919";
+        app.canvas.setDirty(true, true);
+      }
+    } catch (err) {
+      console.warn("[DarkComfyX] canvas palette setup failed:", err);
     }
 
     // Debounced observer for live greentext formatting

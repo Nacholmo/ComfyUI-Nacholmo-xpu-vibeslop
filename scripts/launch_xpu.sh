@@ -138,7 +138,7 @@ while [ -h "$SCRIPT_SOURCE" ]; do
 done
 BOOTSTRAP_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")/bootstrap" && pwd)"
 
-export PYTHONPATH="$BOOTSTRAP_DIR:$PYTHONPATH"
+export PYTHONPATH="$BOOTSTRAP_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 
 # --- VRAM guard: cap the torch XPU allocator below physical VRAM ---

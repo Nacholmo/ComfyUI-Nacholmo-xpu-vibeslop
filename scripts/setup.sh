@@ -16,11 +16,12 @@ TORCH_PIN="2.15.0.dev20260830"
 TORCHVISION_PIN="0.30.0.dev20260831"
 TORCH_INDEX="https://download.pytorch.org/whl/nightly/xpu"
 # Local wheel source (torch215 bmg builds). Falls back to $HOME/llm-scaler.
-WHEELS_DIR="${WHEELS_DIR:-/home/sundae/llm-scaler/wheels}"
+WHEELS_DIR="${WHEELS_DIR:-$HOME/llm-scaler/wheels}"
 
 # Omni XPU custom-node pins (intel/llm-scaler omni 0.2.0-b2 image contract).
 # nunchaku needs --ignore-requires-python on Python 3.14 (declares <3.14).
-OMNI_NODES_PATCH="/home/sundae/Drives/Fenix/Comfy-omni/llm-scaler/omni/patches/comfyui_controlnet_aux_depth_anything_v2_xpu.patch"
+# Override via OMNI_NODES_PATCH env for other checkouts.
+OMNI_NODES_PATCH="${OMNI_NODES_PATCH:-/home/sundae/Drives/Fenix/Comfy-omni/llm-scaler/omni/patches/comfyui_controlnet_aux_depth_anything_v2_xpu.patch}"
 
 usage() {
     echo "Usage: setup.sh [--with-aimdo] [--with-vhs] [--with-minimax-extend] [--all] [--fresh-venv] [--with-omni] [--with-omni-nodes] [--help]"

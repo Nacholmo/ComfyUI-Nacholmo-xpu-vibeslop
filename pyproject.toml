@@ -12,7 +12,10 @@ dependencies = [
   "psutil",
   "numpy",
   "spandrel",
-  "pillow"
+  "pillow",
+  "gguf",
+  "safetensors",
+  "tqdm"
 ]
 
 [tool.comfy]

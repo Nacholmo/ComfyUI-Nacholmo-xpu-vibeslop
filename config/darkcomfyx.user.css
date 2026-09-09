@@ -112,6 +112,7 @@ header.comfy-header,
 .comfyui-menu:not(.comfy-floating-menu),
 .comfy-menu:not(.comfy-floating-menu) {
   background-color: #191919 !important;
+  /* Local-only header: gradient + clover accent via CSS (no remote image). */
   background-image: linear-gradient(
     to bottom,
     transparent 0%,
@@ -120,7 +121,12 @@ header.comfy-header,
     #191919 85%,
     #191919 100%
   ),
-  url("https://github.com/eXo-Necro/Files/blob/master/4chan/Trefle-background.jpg?raw=true") !important;
+  linear-gradient(
+    115deg,
+    rgba(73, 129, 82, 0.16) 0%,
+    rgba(73, 129, 82, 0.05) 28%,
+    transparent 55%
+  ) !important;
   background-position: 0 0, 100% 80% !important;
   background-size: 100% 100%, cover !important;
   background-repeat: no-repeat, no-repeat !important;
