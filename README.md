@@ -27,12 +27,13 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
   - 4-step Turbo LoRA (bypass default sharp / merge low-VRAM) + 4-step sampler for `SamplerCustomAdvanced` (native `ModelSamplingAV` single-schedule or legacy dual-schedule).
 - **MiniMax-H3 Reference Stride (`MiniMaxH3ReferenceToVideoStride`)**:
   - VRAM-saver `MiniMaxH3ReferenceToVideo` variant with uniform frame stride (`pre_vae` / `post_vae`), duration preservation, and `strided` / `full` Qwen modes.
-- **WINT8 Suite (Linux Port)** (`WINT8ModelQuantizer`, `WINT8ModelLoader`, `WINT8LoRALoader`, `WINT8LoRAStack`):
+- **WINT8 Suite (Linux Port, deprecated opt-in `NACHOLMO_WINT8=1`)** (`WINT8ModelQuantizer`, `WINT8ModelLoader`, `WINT8LoRALoader`, `WINT8LoRAStack`):
   - Pure PyTorch INT8 per-row UNet quantization and loading (50% VRAM reduction).
   - Multi-LoRA stacking (up to 5 LoRAs) baked directly onto INT8 weights.
   - Per-row dequant + `F.linear` with optional native `omni_xpu_kernel.int8_linear` fast path; Hadamard rotations (QuaRot) via `wint8_quarot.py`.
   - **Linux Port Enhancements**: Auto-detects Intel oneAPI `icpx`, removes Windows BAT/.pth injection requirements, and natively supports modern Linux Triton >= 3.8 / PyTorch XPU.
-- **TorchCompile Blockwise (`TorchCompileBlockwise`)**:
+  - Deprecated in favor of Kitchen GGUF/SVDQuant + OmniXPU INT8/FP8; kept for legacy workflows.
+- **TorchCompile Blockwise (deprecated opt-in `NACHOLMO_TORCHCOMPILE=1`)** (`TorchCompileBlockwise`):
   - Compiles transformer blocks individually with `torch.compile` / Inductor.
   - Automatically adds Dynamo graph-breaks at ComfyUI memory boundaries for LowVRAM / offloading safety.
   - Filters `transformer_options` guards to prevent recompiles during sampling steps.
@@ -94,9 +95,10 @@ A comprehensive, unified performance toolkit, custom node suite, and launcher en
   - Optimized driver environment flags (`SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1`, `ZE_FLAT_DEVICE_HIERARCHY=COMPOSITE`, unset `ONEAPI_DEVICE_SELECTOR`).
   - Relaxed Level Zero single-allocation limits (`UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1` + `UR_L0_USE_RELAXED_ALLOCATION_LIMITS=1`).
   - Persistent Inductor compilation cache (`TORCHINDUCTOR_FX_GRAPH_CACHE=1`, `TORCHINDUCTOR_CACHE_DIR`).
-  - Dynamic-shapes default (`COMFY_TORCH_COMPILE_DYNAMIC=1`) and allocator tuning (`PYTORCH_ALLOC_CONF`).
-  - Early torchaudio guard via `scripts/bootstrap/sitecustomize.py` on `PYTHONPATH`; VRAM cap via `XPU_VRAM_FRACTION` (default `0.88`).
-  - Forwards all CLI args to `python main.py "$@"` (no forced defaults; pass e.g. `--enable-triton-backend --reserve-vram 5` yourself).
+  - Dynamic-shapes default (`COMFY_TORCH_COMPILE_DYNAMIC=1`); allocator tuning (`PYTORCH_ALLOC_CONF`) in direct mode only.
+  - Early torchaudio guard via `scripts/bootstrap/sitecustomize.py` on `PYTHONPATH`.
+  - VRAM mode is the default: injects `--enable-dynamic-vram --reserve-vram ${OMNI_COMFYUI_RESERVE_VRAM_GB:-4}` (AIMDO VBAR owns allocation; fraction guard dormant). `XPU_VRAM_MODE=direct` restores the native allocator cap via `XPU_VRAM_FRACTION` (default `0.88`).
+  - Forwards all CLI args to `python main.py "$@"` (explicit `--enable-dynamic-vram` / `--reserve-vram` are never duplicated).
 - **`tools/convert_upscale_models.py`**:
   - CLI batch tool to convert PyTorch upscale models (`.pth` / `.safetensors`) into OpenVINO ONNX models with automated output verification.
 - **`scripts/setup.sh`**:
