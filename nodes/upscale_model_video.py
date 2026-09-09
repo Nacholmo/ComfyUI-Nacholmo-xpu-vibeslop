@@ -27,7 +27,11 @@ _COMPILED_UPSCALERS = weakref.WeakKeyDictionary()
 def _compiled_for(model):
     compiled = _COMPILED_UPSCALERS.get(model)
     if compiled is None:
-        compiled = torch.compile(model, dynamic=False)
+        try:
+            compiled = torch.compile(model, dynamic=False)
+        except Exception as e:
+            log.warning(f"[UpscaleVideo] torch.compile failed ({e}); using eager")
+            return model
         _COMPILED_UPSCALERS[model] = compiled
         log.info("[UpscaleVideo] Compiled upscale model")
     return compiled
@@ -95,6 +99,7 @@ class UpscaleVideoWithModel:
                 try:
                     pbar = comfy.utils.ProgressBar((total_frames + bs - 1) // bs)
                     for start in range(0, total_frames, bs):
+                        comfy.model_management.throw_exception_if_processing_interrupted()
                         x = image[start:start + bs].movedim(-1, -3).to(device)
                         frame_count = x.shape[0]
                         if torch_compile and frame_count < bs:

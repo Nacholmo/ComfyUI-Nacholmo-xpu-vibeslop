@@ -191,7 +191,14 @@ class TorchCompileBlockwise:
         compiled_modules = {}
         for key in compile_keys:
             target_module = m.get_model_object(key)
-            compiled_modules[key] = torch.compile(target_module, **compile_kwargs)
+            try:
+                compiled_modules[key] = torch.compile(target_module, **compile_kwargs)
+            except Exception as e:
+                log.warning(f"[TorchCompile] torch.compile failed for {key} ({e}); using uncompiled module")
+                continue
+        if not compiled_modules:
+            log.warning("[TorchCompile] All torch.compile calls failed; returning uncompiled model")
+            return (m,)
 
         try:
             existed = m.model in _COMPILED_MODELS_CACHE

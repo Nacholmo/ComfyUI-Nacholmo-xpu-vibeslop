@@ -168,6 +168,7 @@ def _turbo_sampler(model, x, sigmas, extra_args=None, callback=None, disable=Non
               f"sigmas={[round(float(s),4) for s in sigmas]}  x.shape={tuple(x.shape)} "
               f"dtype={x.dtype}", flush=True)
         for i in trange(len(sigmas) - 1, disable=disable):
+            comfy.model_management.throw_exception_if_processing_interrupted()
             sv, sv_n = float(sigmas[i]), float(sigmas[i + 1])
             denoised = model(x, sigmas[i] * s_in, **extra_args)
             d = (x - denoised) / sigmas[i]
@@ -200,6 +201,7 @@ def _turbo_sampler(model, x, sigmas, extra_args=None, callback=None, disable=Non
           f"sigmas={[round(float(s),4) for s in sigmas]}  x.shape={tuple(x.shape)} "
           f"dtype={x.dtype}  v_numel={v_numel} a_numel={a_numel}  shapes={shapes}", flush=True)
     for i in trange(len(sigmas) - 1, disable=disable):   # tqdm it/s bar, like stock
+        comfy.model_management.throw_exception_if_processing_interrupted()
         sv, sv_n = float(sigmas[i]), float(sigmas[i + 1])
         denoised = model(x, sigmas[i] * s_in, **extra_args)
         out = (x - denoised) / sigmas[i]
@@ -320,7 +322,7 @@ def _make_adaln_forward(base, a, b, shared, table=None, egrid=None):
                 av = a.to(x.device, x.dtype)
                 bv = b.to(x.device, x.dtype)
                 sv = st.to(x.device, x.dtype)
-            x = x + (bv @ (av @ sv.T)).T                              # [M, out]
+                x = x + (bv @ (av @ sv.T)).T                              # [M, out]
         x = x.view(x.shape[0] * base.modalities, base.expand * base.hidden)
         return x.chunk(base.expand, dim=-1)
 

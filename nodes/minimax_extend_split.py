@@ -10,6 +10,7 @@ import logging
 import math
 import torch
 
+import comfy.model_management
 import comfy.nested_tensor
 
 log = logging.getLogger("ComfyUI-Nacholmo-xpu-vibeslop")
@@ -139,6 +140,7 @@ class MiniMaxH3LatentSplit:
     DESCRIPTION = "Splits a long MiniMax-H3 latent into two temporally aligned chunks with context overlap to enable VRAM-safe 2MP upscaling."
 
     def split(self, latent, split_frame=0, overlap_latent_frames=2):
+        comfy.model_management.throw_exception_if_processing_interrupted()
         video, audio, is_av = _extract_video_audio(latent)
         T_total = video.shape[2]
         overlap = _snap_overlap(overlap_latent_frames)
@@ -372,7 +374,8 @@ class MiniMaxH3LatentStitch:
     CATEGORY = "Intel-Arc/MiniMax"
     DESCRIPTION = "Stitches two refined 2MP chunks with boundary-artifact elimination for seamless continuity."
 
-    def stitch(self, chunk_1, chunk_2, overlap_latent_frames=2, blend_mode="seamless_handoff", color_match=False):
+    def stitch(self, chunk_1, chunk_2, overlap_latent_frames=2, blend_mode="variance_preserving_fade", color_match=True):
+        comfy.model_management.throw_exception_if_processing_interrupted()
         v1, a1, is_av1 = _extract_video_audio(chunk_1)
         v2, a2, is_av2 = _extract_video_audio(chunk_2)
         if is_av1 != is_av2:

@@ -481,6 +481,7 @@ class MiniMaxH3ReferenceToVideoStride(io.ComfyNode):
 
         # ---- reference images (unaffected by stride) ----
         for img in (ref_images or {}).values():
+            comfy.model_management.throw_exception_if_processing_interrupted()
             if img is None:
                 continue
             h, w = img.shape[1], img.shape[2]
@@ -498,6 +499,7 @@ class MiniMaxH3ReferenceToVideoStride(io.ComfyNode):
         # ---- reference videos (with striding) ----
         ref_video_audios = ref_video_audios or {}
         for name, video_frames in (ref_videos or {}).items():
+            comfy.model_management.throw_exception_if_processing_interrupted()
             if video_frames is None:
                 continue
             suffix = name.rsplit("_", 1)[-1]
