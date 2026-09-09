@@ -127,6 +127,9 @@ Fails (non-zero) on the first red item; `roll.sh` rolls back automatically:
 3. Boot-to-GUI on an ephemeral port in **both** modes (default VRAM +
    `XPU_VRAM_MODE=direct`): `To see the GUI` present, zero `Traceback`s,
    no `provider rejected` lines.
+   Stage-1 + both boot logs are copied into the roll snapshot dir
+   (`--snapshot-dir`, also honored via `ROLL_SNAP_DIR` env) so RED evidence
+   survives `/tmp` expiry.
 4. API spot-checks: `ArcSuperResolution`, `MiniMaxH3TurboLoRA`,
    `OmniXPUStatus`, `VideoCombineSync`, `SolAttnPatch` (official),
    `ApplySolAttn` + `SolAttnPatchMiniMax` (ours) all resolve with distinct

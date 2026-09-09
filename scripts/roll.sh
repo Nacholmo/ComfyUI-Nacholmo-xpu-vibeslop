@@ -406,9 +406,10 @@ fi
 # past the hard `import comfy_aimdo.malloc_graph`; import-only on XPU) ---
 bash "$SUITE_DIR/scripts/apply-aimdo-shim.sh" || rollback "AIMDO shim failed"
 
-# --- 7. Verify gate ---
+# --- 7. Verify gate (snapshot dir passed so stage1/boot logs are preserved
+# alongside freeze.txt/nodes.txt even on RED) ---
 echo "[roll] running verify gate ..."
-if bash "$SUITE_DIR/scripts/roll-verify.sh"; then
+if bash "$SUITE_DIR/scripts/roll-verify.sh" --snapshot-dir "$SNAP_DIR"; then
     echo "[roll] gate GREEN."
 else
     rollback "verify gate RED"

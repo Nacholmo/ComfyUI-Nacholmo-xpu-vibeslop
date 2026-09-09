@@ -4,15 +4,21 @@
 # ephemeral port (VRAM default + XPU_VRAM_MODE=direct) and kills both.
 # Exit 0 = releasable, non-zero = do NOT roll / roll back.
 #
-# Usage: roll-verify.sh [--port 8399] [--boot-timeout 420]
+# Usage: roll-verify.sh [--port 8399] [--boot-timeout 420] [--snapshot-dir DIR]
 set -uo pipefail
 
 PORT="8399"
 BOOT_TIMEOUT=420
+# Snapshot dir for log preservation (roll.sh passes its per-roll dir via
+# --snapshot-dir or ROLL_SNAP_DIR env). When set, stage1 + boot logs are
+# copied there at exit so RED evidence survives /tmp expiry. Standalone runs
+# without it behave exactly as before.
+ROLL_SNAP_DIR="${ROLL_SNAP_DIR:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --port) PORT="${2:-8399}"; shift 2 ;;
         --boot-timeout) BOOT_TIMEOUT="${2:-420}"; shift 2 ;;
+        --snapshot-dir) ROLL_SNAP_DIR="${2:-}"; shift 2 ;;
         --help|-h) sed -n '2,7p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) if [[ "$1" =~ ^[0-9]+$ ]]; then PORT="$1"; shift; else echo "[verify] Unknown argument: $1" >&2; exit 2; fi ;;
     esac
@@ -163,6 +169,18 @@ _boot_one() { # $1 = vram|direct
 
 _boot_one vram
 _boot_one direct
+
+# Preserve evidence: copy stage1 + boot logs into the roll snapshot dir so a
+# RED diagnosis doesn't depend on /tmp surviving. Best-effort (never fails).
+if [ -n "${ROLL_SNAP_DIR:-}" ] && [ -d "$ROLL_SNAP_DIR" ]; then
+    for _f in /tmp/opencode-roll-verify-stage1.log /tmp/opencode-roll-verify-boot-vram.log /tmp/opencode-roll-verify-boot-direct.log; do
+        if [ -f "$_f" ]; then
+            cp -f "$_f" "$ROLL_SNAP_DIR/$(basename "$_f")" 2>/dev/null || true
+        fi
+    done
+    unset _f
+    echo "[verify] logs preserved in $ROLL_SNAP_DIR"
+fi
 
 if [ "$FAIL" -ne 0 ]; then
     echo "[verify] RESULT: RED — do not release." >&2
