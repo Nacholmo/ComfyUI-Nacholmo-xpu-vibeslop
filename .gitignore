@@ -46,6 +46,7 @@ papers/
 
 # Per-roll evidence (freezes, node commits) — history, not source
 manifests/roll-snapshots/
+manifests/update-snapshots/
 
 # Local debugging scratch (workflow exports, temp JSONs) — not source
 tmp/
