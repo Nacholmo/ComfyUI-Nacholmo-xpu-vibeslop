@@ -137,8 +137,21 @@ Fails (non-zero) on the first red item; `roll.sh` rolls back automatically:
 
 ## 6. Cadence & policy
 
+Pick the cheapest tier that covers what you want to move:
+
+| Tier | Command | Touches venv? | Verify | Time | Use when |
+|---|---|---|---|---|---|
+| Painless | `scripts/update.sh` (add `--core` for core too) | No | quick by default (probe + `--help` smoke, seconds); `--verify=full` for the double boot; `--verify=none` to skip | ~1-3 min + verify | Routine node floats on a healthy stack |
+| Release | `scripts/roll.sh --skip-torch` | Yes (fresh venv, snapshot pins) | Full double boot | ~30 min | Core floats, or nodes need a clean venv |
+| Full float | `scripts/roll.sh` | Yes + torch nightly + provider re-stamp | Full double boot | ~30+ min | Torch/provider advancement (expect RED per §3) |
+
+- `update.sh` snapshots commits to `manifests/update-snapshots/<date>/`
+  (no venv copy — the venv is never modified) and restores them on a RED
+  verify; `update.sh --rollback=<stamp|dir>` restores manually (also reads
+  `roll-snapshots/` dirs). Only nodes that actually moved get their
+  `requirements.txt` reinstalled.
 - Rolls are **manual, never scheduled**: `./scripts/roll.sh` (add `--dry-run`
-  to preview, `--yes` to skip confirmation).
+  to preview, `--yes` to skip confirmation). Same flags on `update.sh`.
 - One layer at a time when diagnosing (`--skip-torch`, `--skip-core`,
   `--skip-nodes`), everything together when confident.
 - After a green roll: review `git diff` of *this suite* (roll only touches
