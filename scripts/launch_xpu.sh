@@ -34,6 +34,7 @@ if [ -z "$COMFY_ROOT" ]; then
     exit 1
 fi
 
+_INVOCATION_DIR="$PWD"
 cd "$COMFY_ROOT" || exit 1
 
 # Activate virtual environment if present
@@ -130,7 +131,12 @@ export UV_LINK_MODE=copy
 export PYTHONWARNINGS="ignore"
 
 # --- Early bootstrap & companion node support ---
+# NOTE: COMFY_ROOT cd above breaks relative BASH_SOURCE paths, so anchor them
+# to the invocation directory captured before cd.
 SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+if [[ "$SCRIPT_SOURCE" != /* ]]; then
+    SCRIPT_SOURCE="${_INVOCATION_DIR:-$PWD}/$SCRIPT_SOURCE"
+fi
 while [ -h "$SCRIPT_SOURCE" ]; do
     SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
     SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"

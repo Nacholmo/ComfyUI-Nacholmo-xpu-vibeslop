@@ -7,9 +7,16 @@
 # Usage: roll-verify.sh [--port 8399] [--boot-timeout 420]
 set -uo pipefail
 
-PORT="${1:-8399}"
-if [ "${1:-}" = "--port" ]; then PORT="${2:-8399}"; fi
+PORT="8399"
 BOOT_TIMEOUT=420
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --port) PORT="${2:-8399}"; shift 2 ;;
+        --boot-timeout) BOOT_TIMEOUT="${2:-420}"; shift 2 ;;
+        --help|-h) sed -n '2,7p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        *) if [[ "$1" =~ ^[0-9]+$ ]]; then PORT="$1"; shift; else echo "[verify] Unknown argument: $1" >&2; exit 2; fi ;;
+    esac
+done
 
 COMFY_ROOT=""
 if [ -f "./main.py" ] && [ -f "./execution.py" ]; then
@@ -131,16 +138,27 @@ _boot_one() { # $1 = vram|direct
             || fail "fraction-cap guard line missing (${_label})"
     fi
     # --- 4. API spot-checks (same booted server) ---
+    if ! command -v curl >/dev/null 2>&1; then
+        fail "curl missing, cannot spot-check API (${_label})"
+    else
     for _node in ArcSuperResolution MiniMaxH3TurboLoRA OmniXPUStatus VideoCombineSync SolAttnPatch ApplySolAttn SolAttnPatchMiniMax; do
-        if curl -s "http://127.0.0.1:${PORT}/object_info/${_node}" 2>/dev/null | grep -a -q "\"${_node}\""; then
+        if curl -s --max-time 10 "http://127.0.0.1:${PORT}/object_info/${_node}" 2>/dev/null | grep -a -q "\"${_node}\""; then
             pass "API serves ${_node} (${_label})"
         else
             fail "API missing ${_node} (${_label})"
         fi
     done
+    fi
     kill "$_pid" 2>/dev/null || true
-    sleep 3
-    unset _label _log _pid _waited _node
+    # Wait for the port to release before the next boot (avoid bind race).
+    for _w in $(seq 1 10); do
+        sleep 1
+        if ! kill -0 "$_pid" 2>/dev/null; then
+            break
+        fi
+    done
+    sleep 2
+    unset _label _log _pid _waited _node _w
 }
 
 _boot_one vram

@@ -52,10 +52,12 @@ fi
 STAMP="$(date +%Y%m%d-%H%M)"
 SNAP_DIR="$SUITE_DIR/manifests/roll-snapshots/$STAMP"
 HOLDS_FILE="$SUITE_DIR/manifests/roll-holds.conf"
-PATCH_FILE="/home/sundae/Drives/Fenix/Comfy-omni/llm-scaler/omni/patches/comfyui_controlnet_aux_depth_anything_v2_xpu.patch"
+# Portable overrides: LLM_SCALER/WHEELS_SRC/PATCH_FILE all honor env so other
+# checkouts don't inherit /home/sundae paths (setup.sh already does this).
+PATCH_FILE="${PATCH_FILE:-${OMNI_NODES_PATCH:-/home/sundae/Drives/Fenix/Comfy-omni/llm-scaler/omni/patches/comfyui_controlnet_aux_depth_anything_v2_xpu.patch}}"
 TORCH_INDEX="https://download.pytorch.org/whl/nightly/xpu"
-LLM_SCALER="/home/sundae/llm-scaler"
-WHEELS_SRC="$LLM_SCALER/wheels"
+LLM_SCALER="${LLM_SCALER:-/home/sundae/llm-scaler}"
+WHEELS_SRC="${WHEELS_SRC:-$LLM_SCALER/wheels}"
 
 # dir|expected-origin-remote (float guard: skip on remote mismatch)
 FLOAT_NODES="
@@ -231,7 +233,12 @@ if [ "$SKIP_TORCH" -eq 0 ]; then
     unset _provdir _stamp_ok _prov
 
     # Kernel wheel reused as-is (no kernel rebuild in a roll — see docs).
+    # Glob prefers the torch215 build but falls back to any kernel wheel so a
+    # torch float past 2.15 doesn't fail on a stale pattern.
     _kernel=( "$WHEELS_SRC"/omni_xpu_kernel-*torch215*.whl )
+    if [ ! -f "${_kernel[0]}" ]; then
+        _kernel=( "$WHEELS_SRC"/omni_xpu_kernel-*.whl )
+    fi
     pip install --no-deps "$_kernel" || rollback "kernel wheel install failed"
     pip install "onednn==2026.0.0" || rollback "onednn install failed"
     unset _kernel
@@ -344,7 +351,12 @@ if [ "$SKIP_NODES" -eq 0 ]; then
         if [ -n "$_caux_hold" ]; then
             echo "[roll] comfyui_controlnet_aux HELD at $_caux_hold"
             git -C "$_caux" checkout --detach "$_caux_hold" || echo "[roll] WARNING: hold checkout failed for controlnet_aux" >&2
-            git -C "$_caux" apply "$PATCH_FILE" 2>/dev/null || git -C "$_caux" apply "$SNAP_DIR/caux-patch-backup.diff" 2>/dev/null || true
+            if [ -f "$PATCH_FILE" ]; then
+                git -C "$_caux" apply "$PATCH_FILE" 2>/dev/null || git -C "$_caux" apply "$SNAP_DIR/caux-patch-backup.diff" 2>/dev/null || true
+            else
+                echo "[roll] WARNING: PATCH_FILE missing ($PATCH_FILE); kept backup diff only" >&2
+                git -C "$_caux" apply "$SNAP_DIR/caux-patch-backup.diff" 2>/dev/null || true
+            fi
         else
             _branch="$(git -C "$_caux" remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p')"
             if git -C "$_caux" fetch --depth 1 origin "$_branch" && git -C "$_caux" checkout --detach FETCH_HEAD; then
@@ -358,8 +370,11 @@ if [ "$SKIP_NODES" -eq 0 ]; then
         fi
         if git -C "$_caux" status --short | grep -a -q "depth_anything_v2/dpt.py"; then
             echo "[roll] controlnet_aux XPU patch present."
-        elif git -C "$_caux" apply "$PATCH_FILE" 2>/dev/null; then
+        elif [ -f "$PATCH_FILE" ] && git -C "$_caux" apply "$PATCH_FILE" 2>/dev/null; then
             echo "[roll] controlnet_aux XPU patch applied."
+        elif [ ! -f "$PATCH_FILE" ]; then
+            echo "[roll] WARNING: PATCH_FILE missing ($PATCH_FILE) — held comfyui_controlnet_aux at $_caux_snap (added to roll-holds.conf)" >&2
+            echo "comfyui_controlnet_aux=$_caux_snap" >> "$HOLDS_FILE"
         else
             git -C "$_caux" checkout --detach "$_caux_snap" 2>/dev/null || true
             git -C "$_caux" apply "$SNAP_DIR/caux-patch-backup.diff" 2>/dev/null || git -C "$_caux" apply "$PATCH_FILE" 2>/dev/null || true
