@@ -20,6 +20,7 @@ import sys
 log = logging.getLogger("ComfyUI-Nacholmo-xpu-vibeslop.VersionCheck")
 
 _INSTALLED = False
+_LOGGED_HOLDS = set()
 
 # Packages intentionally held below requirements.txt for the provider
 # contract. Values here are informational only — the wrapper clamps to
@@ -50,11 +51,13 @@ def _wrap_module(module):
             except Exception:
                 continue
             if versions[name] != installed:
-                log.info(
-                    "[version-check] holding %s at installed %s "
-                    "(requirements wants %s; XPU provider contract — see docs/rolling-release.md)",
-                    name, installed, versions[name],
-                )
+                if name not in _LOGGED_HOLDS:
+                    log.info(
+                        "[version-check] holding %s at installed %s "
+                        "(requirements wants %s; XPU provider contract — see docs/rolling-release.md)",
+                        name, installed, versions[name],
+                    )
+                    _LOGGED_HOLDS.add(name)
                 versions[name] = installed
         return versions
 

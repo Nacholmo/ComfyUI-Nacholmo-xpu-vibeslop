@@ -73,13 +73,14 @@ def apply():
     else:
         try:
             if not (hasattr(torch, "xpu") and torch.xpu.is_available()):
-                return
-            frac = float(os.environ.get("XPU_VRAM_FRACTION", "0.90"))
-            dev_count = torch.xpu.device_count()
-            for dev in range(dev_count):
-                torch.xpu.set_per_process_memory_fraction(frac, dev)
+                log.debug("[xpu-vram-guard] no XPU device; skipping allocator cap (memory-summary override still applies)")
+            else:
+                frac = float(os.environ.get("XPU_VRAM_FRACTION", "0.90"))
+                dev_count = torch.xpu.device_count()
+                for dev in range(dev_count):
+                    torch.xpu.set_per_process_memory_fraction(frac, dev)
+                print(f"[xpu-vram-guard] allocator capped at {frac:.0%} of VRAM across {dev_count} device(s) (override with XPU_VRAM_FRACTION)")
             _APPLIED = True
-            print(f"[xpu-vram-guard] allocator capped at {frac:.0%} of VRAM across {dev_count} device(s) (override with XPU_VRAM_FRACTION)")
         except Exception as e:
             log.debug(f"[xpu-vram-guard] could not set memory fraction: {e}")
 
@@ -92,7 +93,10 @@ def apply():
                 if hasattr(torch, "xpu") and torch.xpu.is_available():
                     return torch.xpu.memory_summary()
                 elif hasattr(torch, "cuda") and torch.cuda.is_available():
-                    return torch.cuda.memory.memory_summary()
+                    try:
+                        return torch.cuda.memory_summary()
+                    except Exception:
+                        return torch.cuda.memory.memory_summary()
             except Exception:
                 pass
             return ""

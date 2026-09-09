@@ -34,6 +34,13 @@ def _patch_minimax_model_module(mod):
         orig_cond_video_rows = diff_model_cls._cond_video_rows
 
         def safe_cond_video_rows(self, payload, device):
+            try:
+                return _rescaled_cond_video_rows(self, payload, device)
+            except Exception as e:
+                log.debug(f"keyframe rescale failed, falling back to stock _cond_video_rows: {e}")
+                return orig_cond_video_rows(self, payload, device)
+
+        def _rescaled_cond_video_rows(self, payload, device):
             layout = payload.get("layout")
             target_hw = None
             if layout is not None and hasattr(layout, "signature") and len(layout.signature) >= 4:
@@ -55,7 +62,14 @@ def _patch_minimax_model_module(mod):
                     num_kf_conds += 1
             # Also build identity set for robust fallback (refs may be same object)
             refs = payload.get("refs") or []
-            ref_ids = set(id(b.get("latent")) for b in refs if b.get("latent") is not None)
+            ref_ids = set()
+            for b in refs:
+                try:
+                    lat = b.get("latent") if isinstance(b, dict) else None
+                    if lat is not None:
+                        ref_ids.add(id(lat))
+                except Exception:
+                    continue
 
             for idx, z in enumerate(payload.get("cond_video_latents", [])):
                 # First num_kf_conds entries are keyframes, rest are refs
@@ -76,7 +90,7 @@ def _patch_minimax_model_module(mod):
 
                 r = mod.patchify_video(z.to(torch.float32), self.patch_size)
                 if aug < 1.0:
-                    gen = torch.Generator("cpu").manual_seed(seed)
+                    gen = torch.Generator(device="cpu").manual_seed(seed)
                     noise = torch.randn(r.shape, generator=gen, dtype=torch.float32)
                     r = aug * r + (1.0 - aug) * noise.to(r.device)
                 rows.append(r.to(device))
@@ -144,7 +158,9 @@ def apply():
         _INSTALLED = True
 
 
-apply()
+# NOTE: no bare apply() on import — patches/__init__.py calls apply()
+# explicitly. Auto-apply here would import torch at module load and trip
+# main.py "Torch already imported" if ever added to prestartup.
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}

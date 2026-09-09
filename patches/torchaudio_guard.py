@@ -27,7 +27,10 @@ class _TorchAudioMetaFinder:
                 orig_exec = spec.loader.exec_module
 
                 def exec_module_patched(module):
-                    orig_exec(module)
+                    try:
+                        orig_exec(module)
+                    except Exception as e:
+                        log.debug(f"torchaudio._extension.utils exec failed, continuing with guard: {e}")
                     if hasattr(module, "_load_lib"):
                         orig_load_lib = module._load_lib
 
@@ -99,6 +102,27 @@ def apply():
                     return False
             safe_load_lib._nacholmo_patched = True
             mod._load_lib = safe_load_lib
+
+    # 2b. Patch torchaudio._extension directly if already imported
+    # (finder never fires for pre-imported modules — residual libcudart vector).
+    ext_mod = sys.modules.get("torchaudio._extension")
+    if ext_mod is not None and not getattr(ext_mod, "_nacholmo_patched", False):
+        try:
+            if getattr(ext_mod, "_IS_TORCHAUDIO_EXT_AVAILABLE", True) is False:
+                pass
+            else:
+                # Only stub when the extension failed to initialise (missing attrs).
+                if not hasattr(ext_mod, "fail_if_no_align"):
+                    try:
+                        from torchaudio._internal.module_utils import no_op
+                        ext_mod.fail_if_no_align = no_op
+                    except Exception:
+                        ext_mod.fail_if_no_align = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("torchaudio extension not available"))
+                if not hasattr(ext_mod, "_check_cuda_version"):
+                    ext_mod._check_cuda_version = lambda: None
+            ext_mod._nacholmo_patched = True
+        except Exception as e:
+            log.debug(f"Could not patch already-loaded torchaudio._extension: {e}")
 
     # 3. Patch torch.ops.load_library if torch is present
     torch_mod = sys.modules.get("torch")

@@ -43,12 +43,11 @@ def apply():
         # In-place variant: never intervene, preserve exact semantics.
         if out is not None:
             return orig_lerp(input, end, weight, out=out)
-        dtypes = _tensor_dtypes((input, end, weight))
-        if len(dtypes) > 1:
-            target = input.dtype
-            for a in (end, weight):
-                if isinstance(a, torch.Tensor):
-                    target = torch.promote_types(target, a.dtype)
+        tensors = [a for a in (input, end, weight) if isinstance(a, torch.Tensor)]
+        if len({a.dtype for a in tensors}) > 1:
+            target = tensors[0].dtype
+            for a in tensors[1:]:
+                target = torch.promote_types(target, a.dtype)
             try:
                 if isinstance(input, torch.Tensor) and input.dtype != target:
                     input = input.to(target)

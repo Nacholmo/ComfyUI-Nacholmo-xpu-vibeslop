@@ -8,7 +8,7 @@ import os
 import sys
 import importlib.util
 
-_BOOTSTRAP_DIR = os.path.dirname(os.path.abspath(__file__))
+_BOOTSTRAP_DIR = os.path.dirname(os.path.realpath(__file__))
 _SCRIPTS_DIR = os.path.dirname(_BOOTSTRAP_DIR)
 _SUITE_DIR = os.path.dirname(_SCRIPTS_DIR)
 _GUARD_PATH = os.path.join(_SUITE_DIR, "patches", "torchaudio_guard.py")
@@ -20,5 +20,12 @@ if os.path.exists(_GUARD_PATH):
         spec.loader.exec_module(mod)
         if hasattr(mod, "apply"):
             mod.apply()
+    except Exception:
+        pass
+else:
+    try:
+        sys.path.insert(0, _SUITE_DIR)
+        from patches.torchaudio_guard import apply as apply_torchaudio_guard
+        apply_torchaudio_guard()
     except Exception:
         pass
