@@ -52,18 +52,98 @@ def _aimdo_owns_allocator():
     return False
 
 
+def _safe_xpu_memory_summary(device=None, abbreviated=False):
+    """Format an XPU memory summary equivalent to torch.cuda.memory_summary()."""
+    try:
+        import torch
+        if not (hasattr(torch, "xpu") and torch.xpu.is_available()):
+            return ""
+        if device is None:
+            dev_idx = torch.xpu.current_device() if hasattr(torch.xpu, "current_device") else 0
+        elif isinstance(device, int):
+            dev_idx = device
+        else:
+            dev_idx = getattr(device, "index", 0) or 0
+
+        dev_name = torch.xpu.get_device_name(dev_idx) if hasattr(torch.xpu, "get_device_name") else f"device {dev_idx}"
+        free_bytes, total_bytes = torch.xpu.mem_get_info(dev_idx) if hasattr(torch.xpu, "mem_get_info") else (0, 0)
+        alloc_bytes = torch.xpu.memory_allocated(dev_idx) if hasattr(torch.xpu, "memory_allocated") else 0
+        max_alloc_bytes = torch.xpu.max_memory_allocated(dev_idx) if hasattr(torch.xpu, "max_memory_allocated") else 0
+        res_bytes = torch.xpu.memory_reserved(dev_idx) if hasattr(torch.xpu, "memory_reserved") else 0
+        max_res_bytes = torch.xpu.max_memory_reserved(dev_idx) if hasattr(torch.xpu, "max_memory_reserved") else 0
+
+        lines = [
+            "=" * 75,
+            f"  PyTorch XPU memory summary, device ID {dev_idx} ({dev_name})",
+            "-" * 75,
+            f"  VRAM Total: {total_bytes / (1024**3):.2f} GiB | Free: {free_bytes / (1024**3):.2f} GiB",
+            f"  Allocated:  {alloc_bytes / (1024**2):.2f} MiB (Peak: {max_alloc_bytes / (1024**2):.2f} MiB)",
+            f"  Reserved:   {res_bytes / (1024**2):.2f} MiB (Peak: {max_res_bytes / (1024**2):.2f} MiB)",
+        ]
+        if hasattr(torch.xpu, "memory_stats"):
+            try:
+                stats = torch.xpu.memory_stats(dev_idx)
+                if stats and not abbreviated:
+                    lines.append("-" * 75)
+                    act = stats.get("active_bytes.all.current", 0) / (1024**2)
+                    act_pk = stats.get("active_bytes.all.peak", 0) / (1024**2)
+                    lines.append(f"  Active:     {act:.2f} MiB (Peak: {act_pk:.2f} MiB)")
+            except Exception:
+                pass
+        lines.append("=" * 75)
+        return "\n".join(lines) + "\n"
+    except Exception as e:
+        return f"XPU memory summary error: {e}\n"
+
+
+def _safe_debug_memory_summary():
+    try:
+        import torch
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            if hasattr(torch.xpu, "memory_summary") and torch.xpu.memory_summary is not _safe_xpu_memory_summary:
+                try:
+                    return torch.xpu.memory_summary()
+                except Exception:
+                    pass
+            return _safe_xpu_memory_summary()
+        elif hasattr(torch, "cuda") and torch.cuda.is_available():
+            try:
+                return torch.cuda.memory_summary()
+            except Exception:
+                return torch.cuda.memory.memory_summary()
+    except Exception:
+        pass
+    return ""
+
+
+def patch_debug_memory_summary():
+    try:
+        import torch
+        if hasattr(torch, "xpu") and not hasattr(torch.xpu, "memory_summary"):
+            torch.xpu.memory_summary = _safe_xpu_memory_summary
+    except Exception:
+        pass
+
+    try:
+        import comfy.model_management as mm
+        mm.debug_memory_summary = _safe_debug_memory_summary
+    except Exception:
+        pass
+
+
 def apply():
     global _APPLIED
-    if _APPLIED:
-        return
     try:
         import torch
     except ImportError:
         return
-    # The prestartup hook exec's this file as a standalone module, so a second
-    # copy runs again at custom-node import time. Dedupe on the shared torch
-    # module object instead of this file's globals.
-    if getattr(torch, "_nacholmo_vram_guard_applied", False):
+
+    # Always re-apply debug_memory_summary patch even if allocator fraction
+    # was already capped (e.g. during prestartup before comfy.model_management
+    # was loaded or overwritten).
+    patch_debug_memory_summary()
+
+    if _APPLIED or getattr(torch, "_nacholmo_vram_guard_applied", False):
         _APPLIED = True
         return
     torch._nacholmo_vram_guard_applied = True
@@ -83,27 +163,6 @@ def apply():
             _APPLIED = True
         except Exception as e:
             log.debug(f"[xpu-vram-guard] could not set memory fraction: {e}")
-
-    try:
-        import comfy.model_management as mm
-
-        def _safe_debug_memory_summary():
-            try:
-                import torch
-                if hasattr(torch, "xpu") and torch.xpu.is_available():
-                    return torch.xpu.memory_summary()
-                elif hasattr(torch, "cuda") and torch.cuda.is_available():
-                    try:
-                        return torch.cuda.memory_summary()
-                    except Exception:
-                        return torch.cuda.memory.memory_summary()
-            except Exception:
-                pass
-            return ""
-
-        mm.debug_memory_summary = _safe_debug_memory_summary
-    except Exception:
-        pass
 
 
 def install_deferred():
@@ -139,4 +198,4 @@ def install_deferred():
     sys.meta_path.insert(0, _TorchGuardMetaFinder)
 
 
-__all__ = ["apply", "install_deferred"]
+__all__ = ["apply", "install_deferred", "patch_debug_memory_summary", "_safe_debug_memory_summary", "_safe_xpu_memory_summary"]

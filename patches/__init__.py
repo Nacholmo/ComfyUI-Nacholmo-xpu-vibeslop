@@ -15,8 +15,9 @@ def apply_torchaudio_guard():
 
 def apply_vram_guard():
     try:
-        from .xpu_vram_guard import apply
+        from .xpu_vram_guard import apply, patch_debug_memory_summary
         apply()
+        patch_debug_memory_summary()
     except Exception as e:
         log.debug(f"VRAM guard not applied: {e}")
 

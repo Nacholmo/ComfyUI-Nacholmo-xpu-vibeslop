@@ -37,11 +37,22 @@ def apply():
         return
 
     orig_lerp = torch.lerp
+    orig_lerp_ = torch.Tensor.lerp_
 
     @functools.wraps(orig_lerp)
     def lerp_promoted(input, end, weight, *, out=None):
-        # In-place variant: never intervene, preserve exact semantics.
+        # If out is supplied, cast inputs to out.dtype to prevent OneDNN type mismatch.
         if out is not None:
+            target = out.dtype
+            try:
+                if isinstance(input, torch.Tensor) and input.dtype != target:
+                    input = input.to(target)
+                if isinstance(end, torch.Tensor) and end.dtype != target:
+                    end = end.to(target)
+                if isinstance(weight, torch.Tensor) and weight.dtype != target:
+                    weight = weight.to(target)
+            except Exception as e:
+                log.debug(f"[xpu-lerp] out promotion to {target} failed, calling through: {e}")
             return orig_lerp(input, end, weight, out=out)
         tensors = [a for a in (input, end, weight) if isinstance(a, torch.Tensor)]
         if len({a.dtype for a in tensors}) > 1:
@@ -59,8 +70,23 @@ def apply():
                 log.debug(f"[xpu-lerp] promotion to {target} failed, calling through: {e}")
         return orig_lerp(input, end, weight)
 
+    @functools.wraps(orig_lerp_)
+    def lerp_inplace_promoted(self, end, weight):
+        target = self.dtype
+        try:
+            if isinstance(end, torch.Tensor) and end.dtype != target:
+                end = end.to(target)
+            if isinstance(weight, torch.Tensor) and weight.dtype != target:
+                weight = weight.to(target)
+        except Exception as e:
+            log.debug(f"[xpu-lerp] lerp_ cast to {target} failed, calling through: {e}")
+        return orig_lerp_(self, end, weight)
+
     lerp_promoted._nacholmo_lerp_patched = True
+    lerp_inplace_promoted._nacholmo_lerp_patched = True
     torch.lerp = lerp_promoted
+    torch.Tensor.lerp = torch.lerp
+    torch.Tensor.lerp_ = lerp_inplace_promoted
     _INSTALLED = True
     print("[XPU-Lerp] Enabled torch.lerp dtype-promotion shim for Intel XPU")
 
