@@ -607,6 +607,9 @@ class ArcSuperResolution:
                                 break
                             else:
                                 raise RuntimeError(f"Arc Super Resolution worker sent unknown status: {status!r}")
+                except BaseException:
+                    _WORKER.stop()
+                    raise
                 finally:
                     if term_pbar is not None:
                         try:

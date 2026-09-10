@@ -69,8 +69,17 @@ except Exception:
         pass
     def ffmpeg_path():
         return "ffmpeg"
-    def merge_filter_args(*args):
-        return []
+    def merge_filter_args(args, ftype="-vf"):
+        try:
+            start_index = args.index(ftype) + 1
+            index = start_index
+            while True:
+                index = args.index(ftype, index)
+                args[start_index] += ',' + args[index + 1]
+                args.pop(index)
+                args.pop(index)
+        except (ValueError, IndexError):
+            pass
     def requeue_workflow(*args):
         pass
     ENCODE_ARGS = ("utf-8", "ignore")
@@ -327,7 +336,7 @@ class VideoCombineSync:
             bitrate = video_format.get('bitrate')
             if bitrate is not None:
                 bitrate_arg = ["-b:v", str(bitrate) + "M" if video_format.get('megabit') == 'True' else str(bitrate) + "K"]
-            args = [ffmpeg_path, "-v", "error", "-f", "rawvideo", "-pix_fmt", i_pix_fmt,
+            args = [_ffmpeg, "-v", "error", "-f", "rawvideo", "-pix_fmt", i_pix_fmt,
                     "-color_range", "pc", "-colorspace", "rgb", "-color_primaries", "bt709",
                     "-color_trc", video_format.get("fake_trc", "iec61966-2-1"),
                     "-s", f"{dimensions[0]}x{dimensions[1]}", "-r", str(frame_rate), "-i", "-"] \
@@ -444,7 +453,7 @@ class VideoCombineSync:
                 else:
                     min_audio_dur = total_frames_output / frame_rate + 1
                     apad = ["-af", f"apad=whole_dur={min_audio_dur}"]
-                mux_args = [ffmpeg_path, "-v", "error", "-n", "-i", file_path,
+                mux_args = [_ffmpeg, "-v", "error", "-n", "-i", file_path,
                             "-ar", str(audio['sample_rate']), "-ac", str(channels),
                             "-f", "f32le", "-i", "-", "-c:v", "copy"] \
                             + video_format["audio_pass"] \
