@@ -170,8 +170,9 @@ def _turbo_sampler(model, x, sigmas, extra_args=None, callback=None, disable=Non
         for i in trange(len(sigmas) - 1, disable=disable):
             comfy.model_management.throw_exception_if_processing_interrupted()
             sv, sv_n = float(sigmas[i]), float(sigmas[i + 1])
+            sigma_cur = sigmas[i].clamp(min=1e-6) if isinstance(sigmas[i], torch.Tensor) else max(float(sigmas[i]), 1e-6)
             denoised = model(x, sigmas[i] * s_in, **extra_args)
-            d = (x - denoised) / sigmas[i]
+            d = (x - denoised) / sigma_cur
             x = x + (sv_n - sv) * d
             print(f"[H3TURBO step {i}] sv={sv:.4f}->{sv_n:.4f}  "
                   f"denoised_rms={_rms(denoised):.4f} x_rms={_rms(x):.4f} d_rms={_rms(d):.4f}",
@@ -203,8 +204,9 @@ def _turbo_sampler(model, x, sigmas, extra_args=None, callback=None, disable=Non
     for i in trange(len(sigmas) - 1, disable=disable):   # tqdm it/s bar, like stock
         comfy.model_management.throw_exception_if_processing_interrupted()
         sv, sv_n = float(sigmas[i]), float(sigmas[i + 1])
+        sigma_cur = sigmas[i].clamp(min=1e-6) if isinstance(sigmas[i], torch.Tensor) else max(float(sigmas[i]), 1e-6)
         denoised = model(x, sigmas[i] * s_in, **extra_args)
-        out = (x - denoised) / sigmas[i]
+        out = (x - denoised) / sigma_cur
         xv, ov = x[..., :v_numel], out[..., :v_numel]
         xa, oa = x[..., v_numel:], out[..., v_numel:]
         xv = xv + (sv_n - sv) * ov               # video on its own sigma
@@ -323,7 +325,7 @@ def _make_adaln_forward(base, a, b, shared, table=None, egrid=None):
                 bv = b.to(x.device, x.dtype)
                 sv = st.to(x.device, x.dtype)
                 x = x + (bv @ (av @ sv.T)).T                              # [M, out]
-        x = x.view(x.shape[0] * base.modalities, base.expand * base.hidden)
+        x = x.reshape(x.shape[0] * base.modalities, base.expand * base.hidden)
         return x.chunk(base.expand, dim=-1)
 
     return forward
@@ -378,8 +380,8 @@ class _FrugalLoRA(comfy.weight_adapter.LoRAAdapter):
         # which spikes peak VRAM and causes OOM on 12GB GPUs.
         # Chunking tokens bounds temporary allocations to <= 32 MB with bit-exact math.
         orig_shape = base_out.shape
-        out_flat = base_out.view(-1, orig_shape[-1])
-        x_flat = x.view(-1, x.shape[-1])
+        out_flat = base_out.reshape(-1, orig_shape[-1])
+        x_flat = x.reshape(-1, x.shape[-1])
         total_tokens = x_flat.shape[0]
         out_dim = out_flat.shape[-1]
 
@@ -395,6 +397,8 @@ class _FrugalLoRA(comfy.weight_adapter.LoRAAdapter):
                 delta = F.linear(F.linear(x_flat[start:end], down), up)
                 out_flat[start:end].add_(delta, alpha=scale)
 
+        if out_flat.data_ptr() != base_out.data_ptr():
+            base_out = out_flat.reshape(orig_shape)
         return base_out
 
 

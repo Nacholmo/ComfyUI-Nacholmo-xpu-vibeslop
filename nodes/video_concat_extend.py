@@ -464,6 +464,14 @@ class VideoConcatExtend:
                 )
         else:
             overlap = int(overlap_frames)
+        if overlap < 0:
+            raise ValueError(
+                f"VideoConcatExtend: overlap={overlap} cannot be negative."
+            )
+        if overlap >= n_before:
+            raise ValueError(
+                f"VideoConcatExtend: overlap={overlap} >= source length {n_before}."
+            )
         if overlap >= n_after:
             raise ValueError(
                 f"VideoConcatExtend: overlap={overlap} >= continuation length {n_after}."
